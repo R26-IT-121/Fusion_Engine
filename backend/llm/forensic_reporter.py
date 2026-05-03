@@ -19,7 +19,7 @@ class LLMBackend(Protocol):
 
 
 class GeminiBackend:
-    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
         import google.generativeai as genai
 
         genai.configure(api_key=api_key)
@@ -81,7 +81,7 @@ def create_llm_backend() -> LLMBackend:
                 "GEMINI_API_KEY is not set. "
                 "Add it to your .env file or set LLM_PROVIDER=ollama."
             )
-        model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         return GeminiBackend(api_key=api_key, model=model)
 
     if provider == "ollama":

@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: deepsent-api
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: GEMINI_API_KEY
+        sync: false          # set this manually in the Render dashboard — never commit the real key
+      - key: CHROMA_DB_PATH
+        value: ./chroma_store
+      - key: FATF_DATA_PATH
+        value: ./data/fatf_typologies.json
+      - key: MODEL_SAVE_PATH
+        value: ./models/meta_classifier.joblib
+      - key: UPSTREAM_TIMEOUT_MS
+        value: "500"
+      - key: GRAPH_MODEL_URL
+        value: http://localhost:8001/api/graph/analyze   # update when Member 1 deploys
+      - key: BEHAVIORAL_MODEL_URL
+        value: http://localhost:8002/api/v1/behavioral/classify   # update when Member 2 deploys
+      - key: TEMPORAL_MODEL_URL
+        value: http://localhost:8003/api/v1/classify   # update when Member 3 deploys

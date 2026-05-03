@@ -19,6 +19,7 @@ from typing import Optional
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -95,6 +96,13 @@ app = FastAPI(
     ),
     version="1.0.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -344,6 +352,114 @@ async def analyze(request: AnalyzeRequest):
         ),
         forensic_report=forensic_report,
         mock_scenario=mock_scenario_used,
+    )
+
+
+class TransactionRequest(BaseModel):
+    transaction_id: Optional[str] = None
+    step: int = Field(ge=1, le=744, description="PaySim simulation hour")
+    type: str = Field(description="TRANSFER | CASH_OUT | CASH_IN | PAYMENT | DEBIT")
+    amount: float = Field(ge=0)
+    nameOrig: str
+    nameDest: str
+    oldbalanceOrg: float = Field(ge=0)
+    newbalanceOrig: float = Field(ge=0)
+    oldbalanceDest: float = Field(ge=0)
+    newbalanceDest: float = Field(ge=0)
+    isFlaggedFraud: int = Field(default=0, ge=0, le=1)
+    mock_scenario: Optional[str] = Field(default=None)
+
+
+def _infer_scenario(req: TransactionRequest) -> str:
+    """Heuristically pick the closest fraud scenario from transaction features."""
+    if req.mock_scenario:
+        return req.mock_scenario
+    if req.type not in ("TRANSFER", "CASH_OUT"):
+        return "legitimate"
+    drain_ratio = req.amount / req.oldbalanceOrg if req.oldbalanceOrg > 0 else 0
+    dest_was_empty = req.oldbalanceDest == 0
+    if drain_ratio >= 0.95 and dest_was_empty:
+        return "layering"
+    if drain_ratio >= 0.95:
+        return "mule_network"
+    if req.amount < 10000:
+        return "smurfing"
+    if req.type == "CASH_OUT" and drain_ratio > 0.5:
+        return "velocity_fraud"
+    return "account_takeover"
+
+
+@app.post("/analyze/transaction", response_model=AnalyzeResponse)
+async def analyze_transaction(req: TransactionRequest):
+    """
+    Accept a full PaySim-style transaction and run the complete pipeline using
+    heuristic mock scores derived from the transaction features. Used for demo
+    and presentation when upstream model APIs are not yet deployed.
+    """
+    transaction_id = req.transaction_id or f"TX_{req.nameOrig}_{req.step}"
+    scenario = _infer_scenario(req)
+
+    from backend.mock_scores import generate_mock_scores, FraudScenario
+    try:
+        fs = FraudScenario(scenario)
+    except ValueError:
+        fs = FraudScenario.RANDOM
+    mock = generate_mock_scores(scenario=fs)
+
+    fusion = meta_classifier.fuse(
+        graph_score=mock.graph_score,
+        behavioral_score=mock.behavioral_score,
+        temporal_score=mock.temporal_score,
+    )
+    retrievals = retriever.retrieve(
+        graph_score=fusion.graph_score,
+        behavioral_score=fusion.behavioral_score,
+        temporal_score=fusion.temporal_score,
+        confidence_score=fusion.confidence_score,
+    )
+    if not retrievals:
+        raise HTTPException(status_code=500, detail="RAG retrieval returned no results.")
+    top_retrieval = retrievals[0]
+
+    forensic_report = None
+    if forensic_reporter is not None:
+        from backend.rag.prompt_builder import build_chain_of_evidence_prompt
+        prompt_package = build_chain_of_evidence_prompt(
+            transaction_id=transaction_id,
+            graph_score=fusion.graph_score,
+            behavioral_score=fusion.behavioral_score,
+            temporal_score=fusion.temporal_score,
+            confidence_score=fusion.confidence_score,
+            graph_available=fusion.graph_available,
+            behavioral_available=fusion.behavioral_available,
+            temporal_available=fusion.temporal_available,
+            retrieval=top_retrieval,
+        )
+        try:
+            forensic_report = forensic_reporter.generate_report(prompt_package)
+        except Exception as e:
+            forensic_report = f"[LLM ERROR] {e}"
+
+    return AnalyzeResponse(
+        transaction_id=transaction_id,
+        fraud_confidence_score=fusion.confidence_score,
+        classification=_classify(fusion.confidence_score),
+        graph_score=fusion.graph_score,
+        behavioral_score=fusion.behavioral_score,
+        temporal_score=fusion.temporal_score,
+        graph_available=fusion.graph_available,
+        behavioral_available=fusion.behavioral_available,
+        temporal_available=fusion.temporal_available,
+        modalities_used=fusion.modalities_used,
+        retrieval=RetrievalInfo(
+            typology_id=top_retrieval.typology_id,
+            typology_name=top_retrieval.typology_name,
+            stage=top_retrieval.stage,
+            risk_level=top_retrieval.risk_level,
+            similarity_score=top_retrieval.similarity_score,
+        ),
+        forensic_report=forensic_report,
+        mock_scenario=mock.scenario,
     )
 
 
