@@ -1,0 +1,182 @@
+[
+  {
+    "id": "FATF-001",
+    "name": "Smurfing / Structuring",
+    "description": "Smurfing involves breaking down large sums of money into smaller, less suspicious amounts and depositing them across multiple accounts or institutions to evade currency transaction reporting thresholds. The process deliberately keeps individual transactions below regulatory detection limits (e.g., below $10,000 in the US). FATF identifies this as one of the most prevalent placement-stage techniques in money laundering operations.",
+    "stage": "Placement",
+    "risk_level": "High",
+    "indicators": [
+      "Multiple transactions just below reporting threshold within a short time window",
+      "High transaction velocity with low individual amounts",
+      "Transactions spread across multiple accounts controlled by associated parties",
+      "Consistent pattern of near-threshold deposits over multiple days",
+      "No clear legitimate business reason for the fragmented structure"
+    ],
+    "graph_signal": "high",
+    "behavioral_signal": "medium",
+    "temporal_signal": "high",
+    "typical_transaction_patterns": "Recurring deposits of $8,000–$9,500 across 5–20 accounts within 24–72 hours. High temporal clustering with consistent amounts."
+  },
+  {
+    "id": "FATF-002",
+    "name": "Layering",
+    "description": "Layering is the second stage of money laundering where illicit funds are obscured through a complex series of financial transactions designed to create distance between the funds and their criminal origin. This involves rapid movement of money through multiple accounts, jurisdictions, and financial instruments. FATF describes layering as the most complex stage, often involving international wire transfers, shell companies, and currency conversions.",
+    "stage": "Layering",
+    "risk_level": "Critical",
+    "indicators": [
+      "Rapid sequential transfers through multiple intermediary accounts",
+      "Funds passing through three or more jurisdictions in a single transaction chain",
+      "Use of multiple currencies or financial instruments within same transaction chain",
+      "Round-tripping of funds back to origin after multiple hops",
+      "Absence of legitimate commercial purpose for complex transaction chains"
+    ],
+    "graph_signal": "high",
+    "behavioral_signal": "high",
+    "temporal_signal": "high",
+    "typical_transaction_patterns": "Chain of 5–15 transfers completing within 48 hours. Funds cycle through shell accounts before reaching end beneficiary. High graph connectivity between otherwise unrelated entities."
+  },
+  {
+    "id": "FATF-003",
+    "name": "Mule Network / Account Takeover Mule",
+    "description": "A money mule network is a coordinated system where recruited individuals (mules) allow their accounts to be used as intermediary conduits for illicit funds, knowingly or unknowingly. FATF typologies document algorithmic mule networks where criminal organizations deploy automated recruitment and fund routing at scale. Mule accounts typically receive funds and immediately forward them, retaining a small commission.",
+    "stage": "Layering",
+    "risk_level": "Critical",
+    "indicators": [
+      "Account receives large incoming transfer and immediately forwards the majority outward",
+      "Hub-and-spoke transaction topology in graph analysis",
+      "Accounts with no prior transaction history suddenly processing large volumes",
+      "Rapid in-out transaction pattern with near-zero net balance retention",
+      "Multiple accounts receiving from same source and forwarding to same destination"
+    ],
+    "graph_signal": "high",
+    "behavioral_signal": "high",
+    "temporal_signal": "medium",
+    "typical_transaction_patterns": "Receive X, transfer 0.85X to 0.95X within hours. Hub node with high in-degree and high out-degree. Spoke nodes with single source and single destination."
+  },
+  {
+    "id": "FATF-004",
+    "name": "Account Takeover Fraud",
+    "description": "Account Takeover (ATO) occurs when a malicious actor gains unauthorized access to a legitimate account and exploits it for fraudulent transactions. FATF classifies ATO as a hybrid financial crime bridging cybercrime and money laundering. Behavioral anomalies are the primary detection signal — the account suddenly exhibits transaction patterns entirely inconsistent with the established user baseline.",
+    "stage": "Placement",
+    "risk_level": "High",
+    "indicators": [
+      "Sudden deviation from established transaction behavioral baseline",
+      "Login or transaction activity from new device, IP, or geographic location",
+      "Rapid high-value transfers immediately following credential change events",
+      "Transactions occurring at unusual hours relative to account history",
+      "Beneficiary accounts never previously transacted with by the account holder"
+    ],
+    "graph_signal": "low",
+    "behavioral_signal": "high",
+    "temporal_signal": "high",
+    "typical_transaction_patterns": "Single large transfer to unknown beneficiary following account access from anomalous device. Sharp spike in transaction value relative to 90-day rolling average."
+  },
+  {
+    "id": "FATF-005",
+    "name": "Placement — Cash Intensive Business Commingling",
+    "description": "This technique involves integrating illicit cash into the revenue stream of a legitimate cash-intensive business (restaurants, car washes, casinos). The criminal inflates the reported revenue of the business to justify deposits of illicit funds, which are then commingled with legitimate income. FATF identifies this as the most common placement technique for street-level criminal organizations.",
+    "stage": "Placement",
+    "risk_level": "Medium",
+    "indicators": [
+      "Business account deposits inconsistent with declared business size or industry averages",
+      "Revenue spike with no corresponding increase in supplier payments or operational costs",
+      "Deposits predominantly in cash with no electronic payment component",
+      "Revenue patterns inconsistent with seasonal industry norms",
+      "Absence of standard accounts payable transactions expected for the industry"
+    ],
+    "graph_signal": "low",
+    "behavioral_signal": "high",
+    "temporal_signal": "low",
+    "typical_transaction_patterns": "Regular large cash deposits to business account with no corresponding outflows to suppliers. Flat operational expense pattern despite revenue growth."
+  },
+  {
+    "id": "FATF-006",
+    "name": "Integration — Shell Company Round-Tripping",
+    "description": "Integration is the final stage where laundered funds re-enter the legitimate financial system appearing as lawful income. Shell company round-tripping involves routing funds through offshore entities that invoice the originating company for fictional services, effectively converting criminal proceeds into apparent business income. FATF extensively documents this as the primary integration vehicle for large-scale organized crime.",
+    "stage": "Integration",
+    "risk_level": "High",
+    "indicators": [
+      "Payments to shell companies for vague or non-verifiable services",
+      "Funds leaving jurisdiction and returning as foreign investment or loan repayment",
+      "Corporate structure with multiple layers of ownership obscuring ultimate beneficial owner",
+      "Transaction amounts matching invoices exactly with no variation across billing periods",
+      "Beneficiary entities registered in high-secrecy financial jurisdictions"
+    ],
+    "graph_signal": "high",
+    "behavioral_signal": "low",
+    "temporal_signal": "low",
+    "typical_transaction_patterns": "Regular fixed-amount outflows to offshore entity followed by equivalent inflows labeled as investment returns or loan repayments. Circular fund flow in graph topology."
+  },
+  {
+    "id": "FATF-007",
+    "name": "Temporal Velocity Fraud / Rapid Movement",
+    "description": "Temporal velocity fraud exploits the speed of modern digital payment networks to move funds through multiple accounts faster than automated detection systems can flag them. FATF typologies document this as an emerging technique used by algorithmic criminal networks. The key characteristic is an abnormally high transaction velocity — the number of fund transfers per unit time — designed to exhaust detection windows.",
+    "stage": "Layering",
+    "risk_level": "High",
+    "indicators": [
+      "Transaction rate exceeding 3 standard deviations above the account historical baseline",
+      "Funds fully exhausted from account within minutes of receipt",
+      "Sequential transfers executed in automated, machine-speed intervals",
+      "Transaction timestamps clustered in seconds-to-milliseconds intervals",
+      "Chain of transfers completing total displacement within a single business hour"
+    ],
+    "graph_signal": "medium",
+    "behavioral_signal": "medium",
+    "temporal_signal": "high",
+    "typical_transaction_patterns": "10–50 sequential transfers completed within 30 minutes. Uniform time intervals between transactions suggesting automated scripting. Account balance reduced to near-zero within detection window."
+  },
+  {
+    "id": "FATF-008",
+    "name": "Trade-Based Money Laundering (TBML)",
+    "description": "Trade-Based Money Laundering involves manipulating international trade transactions to transfer value across borders, disguising the illegal origin of funds. Techniques include over-invoicing, under-invoicing, multiple invoicing, and falsely described goods or services. FATF has identified TBML as one of the most significant and growing mechanisms for laundering criminal proceeds on a global scale.",
+    "stage": "Layering",
+    "risk_level": "Critical",
+    "indicators": [
+      "Invoice amounts significantly above or below market price for described goods",
+      "Multiple invoices for the same shipment across different jurisdictions",
+      "Trade with counterparties in high-risk jurisdictions without clear commercial rationale",
+      "Vague or inconsistent descriptions of goods on shipping documentation",
+      "Payment flows inconsistent with the scale of the declared trade activity"
+    ],
+    "graph_signal": "high",
+    "behavioral_signal": "medium",
+    "temporal_signal": "low",
+    "typical_transaction_patterns": "Large wire transfers to counterparties in non-cooperative jurisdictions. Invoice amounts 200–400% above comparable market rates. Recurring fixed-amount payments masking variable actual trade values."
+  },
+  {
+    "id": "FATF-009",
+    "name": "Crypto-Asset Conversion Layering",
+    "description": "This typology involves converting fiat criminal proceeds into crypto-assets and back to fiat through multiple wallets and exchanges to obscure the audit trail. FATF's 2021 Virtual Asset guidance identifies rapid exchange-hop patterns as a primary red flag, especially when combined with mixing services or privacy coins. The conversion creates a technical gap in the financial audit trail that complicates forensic tracing.",
+    "stage": "Layering",
+    "risk_level": "Critical",
+    "indicators": [
+      "Fiat-to-crypto conversion immediately following receipt of suspect funds",
+      "Multiple crypto wallet hops with no identifiable legitimate commercial purpose",
+      "Use of decentralized exchanges or mixing services to obscure transaction trail",
+      "Crypto-to-fiat conversion at exchange with weak KYC controls",
+      "Transaction amounts fragmenting before conversion matching structuring thresholds"
+    ],
+    "graph_signal": "high",
+    "behavioral_signal": "high",
+    "temporal_signal": "medium",
+    "typical_transaction_patterns": "Fiat deposit → crypto purchase → 3–7 wallet transfers → reconversion to fiat in different jurisdiction within 24–48 hours. Graph shows disconnected wallet cluster with fiat on-ramp and off-ramp."
+  },
+  {
+    "id": "FATF-010",
+    "name": "Loan-Back Scheme",
+    "description": "A loan-back scheme involves a criminal depositing illicit funds into an offshore account or with a complicit financial institution, then taking out a legitimate loan against those funds. The loan appears as legitimate income, the repayments launder the original criminal proceeds, and the criminal gains access to apparently clean funds. FATF categorizes this as an integration-stage technique requiring complicit financial institution access.",
+    "stage": "Integration",
+    "risk_level": "Medium",
+    "indicators": [
+      "Loan repayments exceeding borrower's declared legitimate income sources",
+      "Loan collateral held in high-secrecy jurisdiction",
+      "Loan proceeds immediately transferred to third parties unrelated to the stated purpose",
+      "Loan terms significantly more favorable than market rate without clear justification",
+      "Borrower with no credit history receiving large unsecured loans"
+    ],
+    "graph_signal": "medium",
+    "behavioral_signal": "medium",
+    "temporal_signal": "low",
+    "typical_transaction_patterns": "Regular fixed-amount outflows labeled as loan repayments from account receiving unexplained inflows. Collateral account in offshore jurisdiction with mirrored balance."
+  }
+]
