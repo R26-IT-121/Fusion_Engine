@@ -125,3 +125,40 @@ SECTION 5 — INVESTIGATIVE RECOMMENDATION
 ---"""
 
     return ForensicPromptPackage(system_prompt=system_prompt, user_prompt=user_prompt)
+
+
+def build_baseline_prompt(
+    transaction_id: str,
+    graph_score: float,
+    behavioral_score: float,
+    temporal_score: float,
+    confidence_score: float,
+) -> ForensicPromptPackage:
+    """
+    Builds a prompt WITHOUT any retrieved FATF typology context.
+    Used as the ablation baseline to demonstrate hallucination in ungrounded LLM generation.
+    The LLM receives only numerical scores and must generate a forensic narrative freely.
+    """
+    system_prompt = (
+        "You are a Senior Financial Forensic Analyst. "
+        "Generate a structured Case Investigation Report based on the numerical risk scores provided."
+    )
+
+    user_prompt = f"""Generate a forensic case investigation report for the following transaction.
+
+CASE DATA:
+Transaction ID:         {transaction_id}
+Fused Fraud Confidence: {confidence_score:.4f} ({confidence_score:.1%})
+Graph Network Score:    {graph_score:.4f} ({graph_score:.1%})
+Behavioral Score:       {behavioral_score:.4f} ({behavioral_score:.1%})
+Temporal Score:         {temporal_score:.4f} ({temporal_score:.1%})
+
+Write a report with these five sections:
+
+SECTION 1 — EXECUTIVE SUMMARY
+SECTION 2 — MULTI-MODAL EVIDENCE ANALYSIS
+SECTION 3 — PATTERN ASSESSMENT
+SECTION 4 — CONFIDENCE ASSESSMENT
+SECTION 5 — INVESTIGATIVE RECOMMENDATION"""
+
+    return ForensicPromptPackage(system_prompt=system_prompt, user_prompt=user_prompt)

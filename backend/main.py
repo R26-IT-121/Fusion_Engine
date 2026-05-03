@@ -139,6 +139,13 @@ class AnalyzeRequest(BaseModel):
             "account_takeover, velocity_fraud, legitimate. Defaults to random."
         ),
     )
+    include_baseline: bool = Field(
+        default=False,
+        description=(
+            "If true, also generate an ungrounded baseline report (no FATF typology context) "
+            "alongside the RAG-grounded report. Used for ablation / novelty demonstration."
+        ),
+    )
 
 
 class RetrievalInfo(BaseModel):
@@ -162,6 +169,7 @@ class AnalyzeResponse(BaseModel):
     modalities_used: int
     retrieval: RetrievalInfo
     forensic_report: Optional[str]
+    baseline_report: Optional[str]
     mock_scenario: Optional[str]
 
 
@@ -332,6 +340,23 @@ async def analyze(request: AnalyzeRequest):
             logger.error(f"LLM generation failed: {e}")
             forensic_report = f"[LLM ERROR] Report generation failed: {e}"
 
+    # ── Optional baseline (no RAG context) for ablation / novelty demonstration ─
+    baseline_report = None
+    if request.include_baseline and forensic_reporter is not None:
+        from backend.rag.prompt_builder import build_baseline_prompt
+        baseline_package = build_baseline_prompt(
+            transaction_id=transaction_id,
+            graph_score=fusion.graph_score,
+            behavioral_score=fusion.behavioral_score,
+            temporal_score=fusion.temporal_score,
+            confidence_score=fusion.confidence_score,
+        )
+        try:
+            baseline_report = forensic_reporter.generate_report(baseline_package)
+        except Exception as e:
+            logger.error(f"Baseline LLM generation failed: {e}")
+            baseline_report = f"[LLM ERROR] Baseline generation failed: {e}"
+
     return AnalyzeResponse(
         transaction_id=transaction_id,
         fraud_confidence_score=fusion.confidence_score,
@@ -351,6 +376,7 @@ async def analyze(request: AnalyzeRequest):
             similarity_score=top_retrieval.similarity_score,
         ),
         forensic_report=forensic_report,
+        baseline_report=baseline_report,
         mock_scenario=mock_scenario_used,
     )
 
@@ -459,6 +485,7 @@ async def analyze_transaction(req: TransactionRequest):
             similarity_score=top_retrieval.similarity_score,
         ),
         forensic_report=forensic_report,
+        baseline_report=None,
         mock_scenario=mock.scenario,
     )
 
