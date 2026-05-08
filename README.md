@@ -252,4 +252,4 @@ DeepSentinel/
 | Member 1 | Graph model (GraphSAGE) | PyTorch Geometric |
 | Member 2 | Behavioral model (VAE) | PyTorch |
 | Member 3 | Temporal model (CNN) | TensorFlow |
-| Member 4 (IT22192882) | Fusion engine + explainability (this repo) | FastAPI, scikit-learn, ChromaDB, Gemini |
+| Member 4 | Fusion engine + explainability (this repo) | FastAPI, scikit-learn, ChromaDB, Gemini |
