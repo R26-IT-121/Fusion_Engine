@@ -1,13 +1,13 @@
 """
 Forensic Reporter — LLM Integration
 Supports Gemini API (default) and Ollama (local/offline).
-Controlled by LLM_PROVIDER environment variable.
+Controlled by [llm] provider in config.ini, or the LLM_PROVIDER env var.
 """
 
 import logging
-import os
 from typing import Protocol
 
+from backend import config
 from backend.rag.prompt_builder import ForensicPromptPackage
 
 logger = logging.getLogger(__name__)
@@ -72,24 +72,25 @@ class OllamaBackend:
 
 
 def create_llm_backend() -> LLMBackend:
-    provider = os.getenv("LLM_PROVIDER", "gemini").lower()
+    provider = str(config.get("llm", "provider")).lower()
 
     if provider == "gemini":
-        api_key = os.getenv("GEMINI_API_KEY", "")
-        if not api_key or api_key == "your_gemini_api_key_here":
+        api_key = config.get("secrets", "gemini_api_key")
+        if not api_key or api_key.startswith("your_"):
             raise ValueError(
-                "GEMINI_API_KEY is not set. "
-                "Add it to your .env file or set LLM_PROVIDER=ollama."
+                "No Gemini API key configured. Set GEMINI_API_KEY, or "
+                "[secrets] gemini_api_key in config.ini, or switch to "
+                "[llm] provider = ollama."
             )
-        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        model = config.get("llm", "gemini_model")
         return GeminiBackend(api_key=api_key, model=model)
 
     if provider == "ollama":
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        model = os.getenv("OLLAMA_MODEL", "llama3")
+        base_url = config.get("llm", "ollama_base_url")
+        model = config.get("llm", "ollama_model")
         return OllamaBackend(base_url=base_url, model=model)
 
-    raise ValueError(f"Unknown LLM_PROVIDER: '{provider}'. Choose 'gemini' or 'ollama'.")
+    raise ValueError(f"Unknown LLM provider: '{provider}'. Choose 'gemini' or 'ollama'.")
 
 
 class ForensicReporter:

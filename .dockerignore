@@ -2,7 +2,9 @@
 .git
 .gitignore
 
-# Environment & secrets — never bake into an image
+# Configuration & secrets — never bake into an image.
+# config.example.ini ships; real secrets arrive as env vars at runtime.
+config.ini
 .env
 .env.local
 .env*.local

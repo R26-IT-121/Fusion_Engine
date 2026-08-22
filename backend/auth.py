@@ -5,11 +5,9 @@ Secure user database with JWT tokens and password hashing.
 
 import json
 import logging
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from pathlib import Path
 from typing import Optional
 
 import bcrypt
@@ -17,22 +15,25 @@ import jwt
 from fastapi import HTTPException, Header
 from pydantic import BaseModel, EmailStr
 
+from backend import config
+
 logger = logging.getLogger(__name__)
 
 # --- Security configuration ---
-# JWT_SECRET_KEY MUST be set in production. A random key is generated if absent,
-# which invalidates all tokens on restart — acceptable for dev, fatal for prod.
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
+# The JWT signing key MUST be set in production. A random key is generated if
+# absent, which invalidates all tokens on restart — fine for dev, fatal for prod.
+SECRET_KEY = config.get("secrets", "jwt_secret_key")
 if not SECRET_KEY:
     SECRET_KEY = secrets.token_urlsafe(32)
     logger.warning(
-        "JWT_SECRET_KEY not set — generated an ephemeral key. "
-        "Sessions will be invalidated on restart. Set JWT_SECRET_KEY before deploying."
+        "No JWT signing key configured — generated an ephemeral one. Sessions "
+        "will be invalidated on restart. Set JWT_SECRET_KEY (or [secrets] "
+        "jwt_secret_key in config.ini) before deploying."
     )
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))  # 8h
-USERS_FILE = Path(os.getenv("USERS_FILE", "./users.json"))
+ACCESS_TOKEN_EXPIRE_MINUTES = config.get("auth", "access_token_expire_minutes")
+USERS_FILE = config.get_path("paths", "users_db")
 
 
 class UserRole(str, Enum):
@@ -129,7 +130,7 @@ def load_users() -> dict:
     """Load users from file."""
     if not USERS_FILE.exists():
         # Create default admin user
-        bootstrap_password = os.getenv("ADMIN_BOOTSTRAP_PASSWORD", "admin123")
+        bootstrap_password = config.get("secrets", "admin_bootstrap_password")
         default_admin = User(
             username="admin",
             email="admin@deepsentinel.io",

@@ -5,14 +5,14 @@ Uses JSON file for persistence (can be upgraded to database).
 
 import json
 import logging
-import os
 from dataclasses import dataclass, asdict
-from pathlib import Path
 from typing import List, Optional
+
+from backend import config
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_FILE = Path(os.getenv("SETTINGS_FILE", "./settings.json"))
+SETTINGS_FILE = config.get_path("paths", "runtime_settings")
 
 
 @dataclass

@@ -20,21 +20,30 @@ DeepSentinel uses **SendGrid** for fraud alert emails. No passwords needed - jus
 3. Name it: `DeepSentinel-Fraud-Alerts`
 4. Copy the key (you'll only see it once!)
 
-### Step 3: Configure .env
+### Step 3: Configure config.ini
 
-Create/edit `.env` in DeepSentinel root:
+Edit `config.ini` in the DeepSentinel root:
 
 ```ini
-SENDGRID_API_KEY=SG.xxxxx_paste_your_key_here_xxxxx
-SENDER_EMAIL=alerts@deepsentinel.io
-SENDER_NAME=DeepSentinel Fraud Alerts
+[email]
+sender_email = alerts@deepsentinel.io
+sender_name = DeepSentinel Fraud Alerts
+
+[secrets]
+sendgrid_api_key = SG.xxxxx_paste_your_key_here_xxxxx
 ```
+
+`sender_email` must be a **verified sender** in your SendGrid account, or
+SendGrid will reject the send.
+
+In production, inject `SENDGRID_API_KEY` as an environment variable through
+your platform's secret manager instead — it overrides `config.ini`.
 
 ### Step 4: Restart Backend
 
 ```bash
 cd C:\Projects\DeepSentinel
-pip install -r requirements.txt  # First time only
+python -m pip install -r requirements.txt   # First time only
 python -m uvicorn backend.main:app --reload
 ```
 
@@ -106,21 +115,23 @@ When a fraud transaction is detected, an email is automatically sent containing:
 
 ## Troubleshooting
 
-**"Email send failed. Check Gmail app password or SendGrid API key"**
-- Verify GMAIL_ADDRESS and GMAIL_APP_PASSWORD are correct
-- Ensure app password has spaces removed
-- Check firewall allows SMTP on port 465
-- Restart backend after changing .env
+**"Email send failed"**
+- Verify `[secrets] sendgrid_api_key` in `config.ini` is set
+- Confirm `[email] sender_email` is a verified sender in SendGrid —
+  an unverified sender is the most common cause of a 403
+- Restart the backend after editing `config.ini`
+- Check the backend log: the SendGrid status code and response body are logged
+
+**Nothing sent, but no error either**
+- With no API key configured, sends are mocked and logged rather than
+  delivered. Look for `Mock email send (SendGrid not configured)` in the log.
 
 **"No recipient emails configured"**
-- Add at least one risk manager via Settings page or `/settings/risk-manager` endpoint
+- Add at least one risk manager via the Settings page or the
+  `/settings/risk-manager` endpoint
 
 **Emails going to Spam**
-- Gmail may temporarily filter new senders
-- Add DeepSentinel to contacts to whitelist
-- SendGrid has higher deliverability rates for production
-
-**SMTP Connection Timeout**
-- Check internet connection
-- Verify firewall allows outbound SMTP (port 465)
+- Expected for a new sending domain
+- Set up domain authentication (SPF/DKIM) in SendGrid for production
+  deliverability
 - Try with SendGrid if Gmail times out

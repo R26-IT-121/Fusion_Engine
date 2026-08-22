@@ -5,22 +5,19 @@ No passwords stored - only API key required.
 """
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import List, Optional
 
 import httpx
 
+from backend import config
+
 logger = logging.getLogger(__name__)
 
-# SendGrid (recommended for production - no password needed)
-SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
-SENDER_EMAIL = os.getenv("SENDER_EMAIL", "alerts@deepsentinel.io")
-SENDER_NAME = os.getenv("SENDER_NAME", "DeepSentinel")
-
-# Gmail Bot Account (optional - uses service account, no user password)
-GMAIL_BOT_EMAIL = os.getenv("GMAIL_BOT_EMAIL", "")  # e.g., alerts@deepsentinel-bot.iam.gserviceaccount.com
-GMAIL_SERVICE_ACCOUNT_KEY = os.getenv("GMAIL_SERVICE_ACCOUNT_KEY", "")  # Path to service account JSON
+# SendGrid is called through its REST API — an API key, never a password.
+SENDGRID_API_KEY = config.get("secrets", "sendgrid_api_key")
+SENDER_EMAIL = config.get("email", "sender_email")
+SENDER_NAME = config.get("email", "sender_name")
 
 
 @dataclass

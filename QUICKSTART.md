@@ -4,32 +4,32 @@ Get the fusion engine + web app running in minutes.
 
 ---
 
-## Step 1: Setup Gmail for Email Testing
+## Step 1: Create config.ini
 
-### Generate App Password (required once)
+```powershell
+cd C:\Projects\DeepSentinel
+Copy-Item config.example.ini config.ini
+```
 
-1. Go to https://myaccount.google.com/apppasswords
-2. Select **Mail** and **Windows Computer**
-3. Click **Generate** and copy the 16-character password
-
-### Create .env File
-
-Create `C:\Projects\DeepSentinel\.env`:
+Open `config.ini` and fill in the `[secrets]` section:
 
 ```ini
-# LLM (keep as is or use your own Gemini key)
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=AIzaSyD...your_key_here
+[secrets]
+# Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+jwt_secret_key = <paste generated key>
 
-# Email (use for testing)
-GMAIL_ADDRESS=thiyaana.vidanaarachchi@gmail.com
-GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+# https://aistudio.google.com/app/apikey
+gemini_api_key = <your key>
 
-# Upstream APIs (will add when M1/M3 arrive)
-BEHAVIORAL_API_BASE=http://localhost:8001
-GRAPH_API_BASE=http://localhost:8002
-TEMPORAL_API_BASE=http://localhost:8003
+# https://app.sendgrid.com/settings/api_keys  (optional until you test email)
+sendgrid_api_key =
 ```
+
+Everything else has a working default. `config.ini` is gitignored — it holds
+real keys.
+
+**Precedence:** environment variable > `config.ini` > built-in default. That is
+how cloud deploys inject secrets without editing files.
 
 ---
 
@@ -38,14 +38,21 @@ TEMPORAL_API_BASE=http://localhost:8003
 ```powershell
 cd C:\Projects\DeepSentinel
 
-# Install dependencies (first time only)
-pip install -r requirements.txt
+# Install dependencies (first time only).
+# Note: `pip` alone is not on PATH here — use `python -m pip`.
+python -m pip install -r requirements.txt
+
+# Or, preferred, from the lock file:
+#   python -m poetry install
 
 # Start API server
 python -m uvicorn backend.main:app --reload --port 8000
 ```
 
-✅ Backend running on: http://localhost:8000
+On startup the resolved configuration is printed to the log with secrets
+masked — use it to confirm which values are actually in effect.
+
+Backend running on: http://localhost:8000
 
 ---
 
@@ -61,134 +68,155 @@ npm install
 npm run dev
 ```
 
-✅ Web app running on: http://localhost:5173
+Web app running on: http://localhost:5173
 
 ---
 
-## Step 4: Test Email (Web App)
+## Step 4: Log In
 
-### 4a. Add Risk Manager
+1. Open http://localhost:5173/login
+2. Username `admin`, password `admin123`
+   (or whatever `[secrets] admin_bootstrap_password` is set to)
+
+The admin account is created on first backend start, when `users.json` does
+not yet exist. Change the password before deploying anywhere.
+
+**Roles:**
+
+| Role | Intended for | Access |
+|------|--------------|--------|
+| `admin` | DeepSentinel team | Everything, including configuration |
+| `risk_manager` | Bank risk manager | Transactions, monitoring, alerts — not configuration |
+| `analyst` | Bank assistant manager | Read-only: view transactions and reports |
+
+---
+
+## Step 5: Test Email
+
+### 5a. Add a Risk Manager
 
 1. Open http://localhost:5173/settings
-2. **Add New Risk Manager:**
+2. Under **Add New Risk Manager**:
    - Name: `Test Manager`
-   - Email: `thiyaana.vidanaarachchi@gmail.com`
+   - Email: your address
    - Role: `Risk Manager`
 3. Click **Add Manager**
 
-### 4b. Send Test Email
+### 5b. Send a Test Email
 
 1. Find the risk manager in the list
-2. Click **📧 Test** button
-3. Check your email inbox (or spam folder)
+2. Click **Test**
+3. Check the inbox (and spam folder)
 
-**Expected:** Beautiful HTML fraud alert email
+With no SendGrid key configured, the send is mocked and logged rather than
+delivered — useful for checking the flow without an account.
 
-### 4c. View Email Template
+### 5c. View the Email Template
 
-1. Click "Preview Email Template" button
-2. Opens email preview in browser
+Click **Preview Email Template**, or open:
+
+```
+http://localhost:8000/email-template/preview?classification=HIGH
+```
+
+Classifications: `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`.
 
 ---
 
-## Step 5: Test Pipeline (Analyzer)
-
-### 5a. Run Mock Scenario
+## Step 6: Test the Pipeline
 
 1. Open http://localhost:5173/analyzer
-2. Select a fraud scenario (e.g., "Mule Network")
-3. Click **▶ Run Pipeline**
-4. Watch it process through all 5 steps:
-   - Submit → Score → Fuse → Retrieve → Report
+2. Select a fraud scenario (e.g. "Mule Network")
+3. Click **Run Pipeline**
+4. Watch it move through: Submit → Score → Fuse → Retrieve → Report
 
-### 5b. Expected Output
+**Expected output:**
 
-- **Fraud Confidence Score** (0-100%)
-- **AI Model Scores** (Graph/Behavioral/Temporal)
-- **FATF Typology Match** (fraud pattern classification)
-- **LLM Forensic Report** (AI-generated analysis)
-- **Ablation Comparison** (RAG vs no-RAG)
+- Fraud confidence score (0–100%)
+- Per-modality scores (Graph / Behavioral / Temporal)
+- FATF typology match
+- LLM forensic report
+- Ablation comparison (RAG vs no-RAG)
+
+Upstream scores are simulated until M1 and M3 ship their APIs. The fusion
+engine, RAG retrieval, and LLM report are live.
 
 ---
 
-## Step 6: API Documentation
-
-### Browse Interactive Docs
+## Step 7: API Documentation
 
 ```
 http://localhost:8000/docs
 ```
 
-**Key Endpoints:**
+**Key endpoints:**
 
 | Endpoint | Purpose |
 |----------|---------|
-| `POST /analyze` | Analyze transaction or scenario |
-| `GET /settings` | Get all settings |
-| `POST /settings/risk-manager` | Add risk manager |
-| `DELETE /settings/risk-manager/{email}` | Remove risk manager |
-| `POST /email/send-test` | Send test email |
-| `GET /email-template/preview` | View email template |
+| `POST /auth/login` | Log in, returns a JWT |
+| `GET /auth/me` | Current user |
+| `POST /analyze` | Analyze a transaction or scenario |
+| `GET /settings` | Read configuration |
+| `POST /settings/risk-manager` | Add a risk manager |
+| `DELETE /settings/risk-manager/{email}` | Remove a risk manager |
+| `POST /email/send-test` | Send a test email |
+| `GET /email-template/preview` | View the email template |
 
 ---
 
 ## Troubleshooting
 
-### "Gmail send failed"
+### "pip is not recognized"
 
-**Solution:**
-- Verify `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` in `.env`
-- App password should have spaces (they're automatic)
-- Restart backend after changing `.env`
-- Check your Gmail security settings
+`pip` is not on PATH on this machine. Use `python -m pip` instead.
+
+### numpy or scikit-learn fails to build
+
+Older pinned versions have no Python 3.13 wheels, so pip falls back to
+compiling from source and fails without a C compiler. `requirements.txt` now
+uses ranges rather than hard pins, which resolves to versions that do ship
+wheels. If you still hit it, `python -m poetry install` uses the lock file.
+
+### Email send failed
+
+- Check `[secrets] sendgrid_api_key` in `config.ini`
+- `[email] sender_email` must be a **verified sender** in your SendGrid
+  account, otherwise SendGrid rejects the send
+- Restart the backend after editing `config.ini`
+
+### A config change had no effect
+
+An environment variable overrides `config.ini`. The startup log prints the
+resolved configuration — it shows the value actually in use. If a stale value
+persists, look for it in `.env` or your shell environment.
 
 ### Backend won't start
 
-**Solution:**
 ```powershell
-# Clear Python cache
 Remove-Item -Path "C:\Projects\DeepSentinel\backend\__pycache__" -Recurse -Force
-
-# Reinstall dependencies
-pip install --upgrade -r requirements.txt
-
-# Try again
+python -m pip install --upgrade -r requirements.txt
 python -m uvicorn backend.main:app --reload
 ```
 
 ### Web app won't load
 
-**Solution:**
 ```powershell
-# Clear node cache
 Remove-Item -Path "C:\Projects\Deepsentinel-WEB\node_modules" -Recurse -Force
-
-# Reinstall
 npm install
-
-# Try again
 npm run dev
 ```
 
-### Email goes to Spam
-
-**Solution:**
-- Add `alerts@deepsentinel.io` or your Gmail to contacts
-- Check spam folder during testing
-- Move to inbox to whitelist sender
-- Use SendGrid for production (better deliverability)
-
 ---
 
-## Next Steps (Aug 24-28)
+## Next Steps (Aug 24–28)
 
 | Date | Task |
 |------|------|
-| **Aug 24** | M1 & M3 APIs arrive → update `.env` → test full pipeline |
-| **Aug 25** | Add real transaction input form → enhanced visualization |
-| **Aug 26** | Cloud deployment (AWS/GCP) → email notifications live |
-| **Aug 27** | Mobile app (React Native) → polish UI |
-| **Aug 28** | Final demo ready |
+| **Aug 24** | M1 and M3 APIs arrive → update `[upstream]` in `config.ini` → test full pipeline |
+| **Aug 25** | Enforce auth on API endpoints, transaction input form, tests |
+| **Aug 26** | PostgreSQL migration, cloud deployment |
+| **Aug 27** | Mobile app, email automation, UI polish |
+| **Aug 28** | Final demo |
 
 ---
 
@@ -196,24 +224,22 @@ npm run dev
 
 | Path | Purpose |
 |------|---------|
-| `backend/main.py` | FastAPI server (endpoints) |
+| `config.ini` | All configuration (gitignored) |
+| `config.example.ini` | Documented template |
+| `backend/config.py` | Config loader: env > config.ini > default |
+| `backend/main.py` | FastAPI server and endpoints |
+| `backend/auth.py` | Authentication and role-based access control |
 | `backend/adapters/upstream.py` | M1/M2/M3 API integration |
-| `backend/email_service.py` | Email sending (Gmail/SendGrid) |
-| `backend/settings.py` | Configuration management |
-| `backend/rag/` | RAG pipeline + LLM |
-| `src/pages/Analyzer.jsx` | Pipeline visualization |
-| `src/pages/Settings.jsx` | Risk manager configuration |
-| `src/services/api.js` | Backend API client |
+| `backend/email_service.py` | Fraud alert email via SendGrid |
+| `backend/settings.py` | Risk manager and alert configuration |
+| `backend/rag/` | RAG pipeline and prompt construction |
+| `pyproject.toml` / `poetry.lock` | Dependencies, reproducible builds |
 
 ---
 
-## Asking for Help
+## Getting Help
 
-- **API errors?** Check `http://localhost:8000/docs`
-- **UI issues?** Check browser console (F12)
-- **Email problems?** See EMAIL_SETUP.md
-- **Code questions?** Check code comments in backend files
-
----
-
-**You're all set! Let's build the best fraud detection system. 🚀**
+- **API errors** — check http://localhost:8000/docs
+- **UI issues** — check the browser console (F12)
+- **Email problems** — see EMAIL_SETUP.md
+- **Config questions** — see the comments in config.example.ini

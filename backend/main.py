@@ -22,6 +22,10 @@ from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from backend import config
+
+# .env is still read so environment variables set there override config.ini,
+# which keeps existing docker-compose and platform deploys working unchanged.
 load_dotenv()
 
 logging.basicConfig(
@@ -30,17 +34,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("deepsentinel")
 
-# --- Config from environment ---
-CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_store")
-FATF_DATA_PATH = os.getenv("FATF_DATA_PATH", "./data/fatf_typologies.json")
-MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "./models/meta_classifier.joblib")
+# --- Config: environment > config.ini > default (see backend/config.py) ---
+CHROMA_DB_PATH = config.get("paths", "chroma_db")
+FATF_DATA_PATH = config.get("paths", "fatf_data")
+MODEL_SAVE_PATH = config.get("paths", "meta_classifier")
 
 # Upstream base URLs — adapters append the correct path per model
-BEHAVIORAL_API_BASE = os.getenv("BEHAVIORAL_API_BASE", "http://localhost:8001")  # M1 VAE
-GRAPH_API_BASE = os.getenv("GRAPH_API_BASE", "http://localhost:8002")            # M2 GraphSAGE
-TEMPORAL_API_BASE = os.getenv("TEMPORAL_API_BASE", "http://localhost:8003")      # M3 TCN
+BEHAVIORAL_API_BASE = config.get("upstream", "behavioral_api_base")  # M1 VAE
+GRAPH_API_BASE = config.get("upstream", "graph_api_base")            # M2 GraphSAGE
+TEMPORAL_API_BASE = config.get("upstream", "temporal_api_base")      # M3 TCN
 
-UPSTREAM_TIMEOUT = float(os.getenv("UPSTREAM_TIMEOUT_MS", "5000")) / 1000.0
+UPSTREAM_TIMEOUT = config.get("upstream", "timeout_ms") / 1000.0
 
 # --- Lazy-initialized singletons ---
 knowledge_base = None
@@ -59,6 +63,18 @@ async def lifespan(app: FastAPI):
     from backend.llm.forensic_reporter import ForensicReporter, create_llm_backend
 
     logger.info("=== DeepSentinel Fusion Engine — Starting Up ===")
+
+    # Fail fast on a misconfigured deploy rather than at the first request.
+    strict = config.is_production()
+    problems = config.validate(strict=strict)
+    if problems:
+        for p in problems:
+            logger.error(f"Configuration error: {p}")
+        raise RuntimeError(
+            f"{len(problems)} configuration error(s) — refusing to start in "
+            f"production. See errors above."
+        )
+    logger.info(config.describe())
 
     logger.info("Initializing FATF Knowledge Base...")
     knowledge_base = FATFKnowledgeBase(

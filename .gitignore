@@ -1,4 +1,6 @@
-# Environment — never commit secrets
+# Configuration — never commit secrets.
+# config.example.ini is the committed template; config.ini holds real keys.
+config.ini
 .env
 
 # User database — contains password hashes, never commit
