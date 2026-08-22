@@ -1,29 +1,26 @@
 """
 Email service for fraud alert notifications.
-Sends beautiful HTML reports to configured risk managers.
-Supports Gmail SMTP (for testing) and SendGrid (production).
+Sends beautiful HTML reports to configured risk managers via SendGrid.
+No passwords stored - only API key required.
 """
 
 import logging
 import os
-import smtplib
 from dataclasses import dataclass
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from typing import List, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-# Gmail SMTP (for testing)
-GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS", "")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
-
-# SendGrid (production)
+# SendGrid (recommended for production - no password needed)
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "alerts@deepsentinel.io")
 SENDER_NAME = os.getenv("SENDER_NAME", "DeepSentinel")
+
+# Gmail Bot Account (optional - uses service account, no user password)
+GMAIL_BOT_EMAIL = os.getenv("GMAIL_BOT_EMAIL", "")  # e.g., alerts@deepsentinel-bot.iam.gserviceaccount.com
+GMAIL_SERVICE_ACCOUNT_KEY = os.getenv("GMAIL_SERVICE_ACCOUNT_KEY", "")  # Path to service account JSON
 
 
 @dataclass
@@ -50,7 +47,7 @@ async def send_fraud_alert(
     recipient_emails: List[str],
     backend_url: str = "http://localhost:8000",
 ) -> bool:
-    """Send fraud alert email via Gmail SMTP, SendGrid, or mock."""
+    """Send fraud alert email via SendGrid (no password required)."""
 
     if not recipient_emails:
         logger.warning("No recipient emails configured")
@@ -58,41 +55,15 @@ async def send_fraud_alert(
 
     html_body = _build_email_html(alert, backend_url)
 
-    # Try Gmail SMTP first (testing)
-    if GMAIL_ADDRESS and GMAIL_APP_PASSWORD:
-        return _send_via_gmail(alert, recipient_emails, html_body)
-    # Then SendGrid (production)
-    elif SENDGRID_API_KEY:
+    # Use SendGrid (production - API key only, no password)
+    if SENDGRID_API_KEY:
         return await _send_via_sendgrid(alert, recipient_emails, html_body)
-    # Mock send if no credentials
+    # Mock send if no credentials (for development/testing)
     else:
         logger.info(
-            f"Mock email send (no Gmail/SendGrid configured): {alert.transaction_id} → {recipient_emails}"
+            f"Mock email send (SendGrid not configured): {alert.transaction_id} → {recipient_emails}"
         )
         return True
-
-
-def _send_via_gmail(alert: FraudAlert, recipient_emails: List[str], html_body: str) -> bool:
-    """Send via Gmail SMTP (for testing)."""
-    try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"🚨 Fraud Alert: Transaction {alert.transaction_id}"
-        msg["From"] = GMAIL_ADDRESS
-        msg["To"] = ", ".join(recipient_emails)
-
-        html_part = MIMEText(html_body, "html")
-        msg.attach(html_part)
-
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_ADDRESS, recipient_emails, msg.as_string())
-
-        logger.info(f"Email sent via Gmail: {alert.transaction_id} → {recipient_emails}")
-        return True
-
-    except Exception as e:
-        logger.error(f"Gmail send failed: {type(e).__name__}: {e}")
-        return False
 
 
 async def _send_via_sendgrid(
