@@ -607,3 +607,90 @@ async def send_test_email(req: RiskManagerRequest):
             detail="Email send failed. Check Gmail app password or SendGrid API key in .env",
         )
     return {"status": "sent", "recipient": req.email, "note": "Check spam folder if not received"}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AUTHENTICATION & USER MANAGEMENT
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@app.post("/auth/login")
+async def login(req: dict):
+    """Login user and return JWT token."""
+    from backend.auth import authenticate_user, create_access_token, TokenResponse
+
+    username = req.get("username")
+    password = req.get("password")
+
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password required")
+
+    user = authenticate_user(username, password)
+    if not user:
+        logger.warning(f"Failed login attempt: {username}")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = create_access_token(user.username, user.role)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+        },
+    }
+
+
+@app.post("/auth/register")
+async def register(req: dict):
+    """Register new user (admin only)."""
+    from backend.auth import create_user, UserCreate, get_current_user, UserRole
+
+    # Only admin can create users
+    try:
+        current_user = get_current_user(Header(req.get("authorization", "")))
+        if current_user.role != UserRole.ADMIN:
+            raise HTTPException(status_code=403, detail="Only admins can create users")
+    except:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        user_create = UserCreate(
+            username=req.get("username"),
+            email=req.get("email"),
+            full_name=req.get("full_name"),
+            password=req.get("password"),
+            role=req.get("role", UserRole.ANALYST),
+        )
+        user = create_user(user_create)
+        return {"status": "created", "username": user.username}
+    except Exception as e:
+        logger.error(f"User creation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/auth/me")
+async def get_me(authorization: Optional[str] = Header(None)):
+    """Get current user info."""
+    from backend.auth import get_current_user
+
+    user = get_current_user(authorization)
+    return {
+        "username": user.username,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "last_login": user.last_login,
+    }
+
+
+@app.post("/auth/logout")
+async def logout(authorization: Optional[str] = Header(None)):
+    """Logout user (token invalidation handled client-side)."""
+    from backend.auth import get_current_user
+
+    user = get_current_user(authorization)
+    logger.info(f"User logged out: {user.username}")
+    return {"status": "logged_out"}
