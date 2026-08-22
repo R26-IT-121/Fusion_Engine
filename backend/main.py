@@ -18,7 +18,7 @@ from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -32,12 +32,15 @@ logger = logging.getLogger("deepsentinel")
 
 # --- Config from environment ---
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_store")
-FATF_DATA_PATH = os.getenv("FATF_DATA_PATH", "../data/fatf_typologies.json")
+FATF_DATA_PATH = os.getenv("FATF_DATA_PATH", "./data/fatf_typologies.json")
 MODEL_SAVE_PATH = os.getenv("MODEL_SAVE_PATH", "./models/meta_classifier.joblib")
-GRAPH_MODEL_URL = os.getenv("GRAPH_MODEL_URL", "http://localhost:8001/predict")
-BEHAVIORAL_MODEL_URL = os.getenv("BEHAVIORAL_MODEL_URL", "http://localhost:8002/predict")
-TEMPORAL_MODEL_URL = os.getenv("TEMPORAL_MODEL_URL", "http://localhost:8003/predict")
-UPSTREAM_TIMEOUT = float(os.getenv("UPSTREAM_TIMEOUT_MS", "500")) / 1000.0
+
+# Upstream base URLs — adapters append the correct path per model
+BEHAVIORAL_API_BASE = os.getenv("BEHAVIORAL_API_BASE", "http://localhost:8001")  # M1 VAE
+GRAPH_API_BASE = os.getenv("GRAPH_API_BASE", "http://localhost:8002")            # M2 GraphSAGE
+TEMPORAL_API_BASE = os.getenv("TEMPORAL_API_BASE", "http://localhost:8003")      # M3 TCN
+
+UPSTREAM_TIMEOUT = float(os.getenv("UPSTREAM_TIMEOUT_MS", "5000")) / 1000.0
 
 # --- Lazy-initialized singletons ---
 knowledge_base = None
@@ -108,42 +111,60 @@ app.add_middleware(
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
+class TransactionData(BaseModel):
+    """Full PaySim-style transaction — forwarded to upstream model APIs."""
+    step: int = Field(ge=1, le=744, description="PaySim simulation hour (1–744)")
+    type: str = Field(description="TRANSFER | CASH_OUT | CASH_IN | PAYMENT | DEBIT")
+    amount: float = Field(ge=0)
+    nameOrig: str
+    nameDest: str
+    oldbalanceOrg: float = Field(ge=0)
+    newbalanceOrig: float = Field(ge=0)
+    oldbalanceDest: float = Field(ge=0)
+    newbalanceDest: float = Field(ge=0)
+    isFlaggedFraud: int = Field(default=0, ge=0, le=1)
+
+
 class AnalyzeRequest(BaseModel):
     transaction_id: Optional[str] = Field(
         default=None,
         description="Transaction identifier. Auto-generated UUID if omitted.",
     )
-    graph_score: Optional[float] = Field(
+    transaction: Optional[TransactionData] = Field(
         default=None,
-        ge=0.0, le=1.0,
-        description="Graph Neural Network fraud probability (0–1). Omit to use mock.",
+        description=(
+            "Full PaySim transaction data. When provided, forwarded to each upstream "
+            "model API so they can run their own analysis. Takes priority over direct scores."
+        ),
+    )
+    graph_score: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0,
+        description="GraphSAGE fraud probability (0–1). Used only when transaction is omitted.",
     )
     behavioral_score: Optional[float] = Field(
-        default=None,
-        ge=0.0, le=1.0,
-        description="Behavioral VAE anomaly probability (0–1). Omit to use mock.",
+        default=None, ge=0.0, le=1.0,
+        description="VAE behavioral anomaly score (0–1). Used only when transaction is omitted.",
     )
     temporal_score: Optional[float] = Field(
-        default=None,
-        ge=0.0, le=1.0,
-        description="Temporal CNN anomaly probability (0–1). Omit to use mock.",
+        default=None, ge=0.0, le=1.0,
+        description="TCN temporal anomaly score (0–1). Used only when transaction is omitted.",
     )
     use_mock: bool = Field(
         default=False,
-        description="Force use of mock score generator (ignores provided scores).",
+        description="Force mock score generator (ignores all scores and transaction data).",
     )
     mock_scenario: Optional[str] = Field(
         default=None,
         description=(
-            "Mock scenario to simulate. Options: smurfing, layering, mule_network, "
-            "account_takeover, velocity_fraud, legitimate. Defaults to random."
+            "Mock scenario: smurfing | layering | mule_network | "
+            "account_takeover | velocity_fraud | legitimate. Defaults to random."
         ),
     )
     include_baseline: bool = Field(
         default=False,
         description=(
-            "If true, also generate an ungrounded baseline report (no FATF typology context) "
-            "alongside the RAG-grounded report. Used for ablation / novelty demonstration."
+            "Also generate an ungrounded baseline report (no FATF context) "
+            "for ablation / novelty demonstration."
         ),
     )
 
@@ -171,43 +192,42 @@ class AnalyzeResponse(BaseModel):
     forensic_report: Optional[str]
     baseline_report: Optional[str]
     mock_scenario: Optional[str]
+    # Rich upstream signals (populated when transaction data provided)
+    behavioral_signal: Optional[str] = None
+    graph_signal: Optional[str] = None
+    temporal_signal: Optional[str] = None
 
 
-# ── Upstream model caller ─────────────────────────────────────────────────────
+# ── Upstream callers ──────────────────────────────────────────────────────────
 
-async def _call_upstream_model(
-    client: httpx.AsyncClient,
-    url: str,
+async def _fetch_from_upstream_apis(
+    transaction: TransactionData,
     transaction_id: str,
-) -> Optional[float]:
-    try:
-        response = await client.post(
-            url,
-            json={"transaction_id": transaction_id},
-            timeout=UPSTREAM_TIMEOUT,
-        )
-        response.raise_for_status()
-        data = response.json()
-        score = float(data.get("probability", data.get("score", 0.5)))
-        return max(0.0, min(1.0, score))
-    except Exception as e:
-        logger.warning(f"Upstream model at {url} failed: {type(e).__name__}: {e}")
-        return None
+) -> tuple:
+    """
+    Call all three upstream model APIs in parallel using their correct schemas.
+    Returns (behavioral_resp, graph_resp, temporal_resp) — all UpstreamResponse.
+    """
+    from backend.adapters.upstream import (
+        call_behavioral_api,
+        call_graph_api,
+        call_temporal_api,
+    )
 
+    tx_dict = transaction.model_dump()
+    tx_dict["transaction_id"] = transaction_id  # GraphSAGE expects top-level transaction_id
 
-async def _fetch_upstream_scores(transaction_id: str) -> tuple[Optional[float], Optional[float], Optional[float]]:
     async with httpx.AsyncClient() as client:
-        graph_task = _call_upstream_model(client, GRAPH_MODEL_URL, transaction_id)
-        behavioral_task = _call_upstream_model(client, BEHAVIORAL_MODEL_URL, transaction_id)
-        temporal_task = _call_upstream_model(client, TEMPORAL_MODEL_URL, transaction_id)
+        b_task = call_behavioral_api(client, BEHAVIORAL_API_BASE, tx_dict, UPSTREAM_TIMEOUT)
+        g_task = call_graph_api(client, GRAPH_API_BASE, tx_dict, UPSTREAM_TIMEOUT)
+        t_task = call_temporal_api(client, TEMPORAL_API_BASE, tx_dict, UPSTREAM_TIMEOUT)
 
-        graph, behavioral, temporal = await asyncio.gather(
-            graph_task, behavioral_task, temporal_task
-        )
-    return graph, behavioral, temporal
+        behavioral, graph, temporal = await asyncio.gather(b_task, g_task, t_task)
+
+    return behavioral, graph, temporal
 
 
-# ── Helper ────────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _classify(confidence: float) -> str:
     if confidence >= 0.80:
@@ -228,6 +248,11 @@ async def health():
         "knowledge_base": knowledge_base is not None,
         "meta_classifier": meta_classifier is not None,
         "llm_reporter": forensic_reporter is not None,
+        "upstream_bases": {
+            "behavioral": BEHAVIORAL_API_BASE,
+            "graph": GRAPH_API_BASE,
+            "temporal": TEMPORAL_API_BASE,
+        },
     }
 
 
@@ -248,14 +273,22 @@ async def list_typologies():
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest):
     """
-    Full pipeline: fetch upstream scores → fuse → retrieve FATF typology → generate forensic report.
+    Full pipeline: obtain scores → fuse → retrieve FATF typology → generate forensic report.
+
+    Score acquisition priority:
+      1. use_mock=True  → mock generator
+      2. transaction    → call all three upstream APIs with full transaction data
+      3. direct scores  → use provided graph_score / behavioral_score / temporal_score
+      4. fallback       → mock generator (all scores missing)
     """
     transaction_id = request.transaction_id or str(uuid.uuid4())
     mock_scenario_used = None
+    behavioral_signal = graph_signal = temporal_signal = None
 
-    # ── Step 1: Obtain sub-model scores ──────────────────────────────────────
+    # ── Step 1: Obtain sub-model scores ─────────────────────────────────────
     if request.use_mock or (
-        request.graph_score is None
+        request.transaction is None
+        and request.graph_score is None
         and request.behavioral_score is None
         and request.temporal_score is None
     ):
@@ -268,8 +301,10 @@ async def analyze(request: AnalyzeRequest):
             except ValueError:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Unknown mock_scenario '{request.mock_scenario}'. "
-                           f"Valid options: {[s.value for s in FraudScenario if s.value != 'random']}",
+                    detail=(
+                        f"Unknown mock_scenario '{request.mock_scenario}'. "
+                        f"Valid options: {[s.value for s in FraudScenario if s.value != 'random']}"
+                    ),
                 )
         mock = generate_mock_scores(scenario=scenario)
         graph_score = mock.graph_score
@@ -279,28 +314,45 @@ async def analyze(request: AnalyzeRequest):
         graph_available = behavioral_available = temporal_available = True
         logger.info(f"Using mock scores for scenario '{mock_scenario_used}'.")
 
-    elif (
-        request.graph_score is not None
-        and request.behavioral_score is not None
-        and request.temporal_score is not None
-    ):
-        # All scores provided directly — bypass upstream call
+    elif request.transaction is not None:
+        # Call all three upstream APIs with the full transaction payload
+        logger.info(f"Calling upstream APIs for transaction {transaction_id}.")
+        b_resp, g_resp, t_resp = await _fetch_from_upstream_apis(
+            request.transaction, transaction_id
+        )
+
+        behavioral_score = b_resp.score if b_resp.available else None
+        graph_score = g_resp.score if g_resp.available else None
+        temporal_score = t_resp.score if t_resp.available else None
+
+        behavioral_available = b_resp.available
+        graph_available = g_resp.available
+        temporal_available = t_resp.available
+
+        behavioral_signal = b_resp.fraud_signal_summary
+        graph_signal = g_resp.fraud_signal_summary
+        temporal_signal = t_resp.fraud_signal_summary
+
+        if not any([behavioral_available, graph_available, temporal_available]):
+            logger.warning("All upstream APIs unavailable — falling back to mock.")
+            from backend.mock_scores import generate_mock_scores, FraudScenario
+            mock = generate_mock_scores(scenario=FraudScenario.RANDOM)
+            graph_score = mock.graph_score
+            behavioral_score = mock.behavioral_score
+            temporal_score = mock.temporal_score
+            mock_scenario_used = mock.scenario
+            graph_available = behavioral_available = temporal_available = True
+
+    else:
+        # Direct score injection — useful for testing and dashboard demos
         graph_score = request.graph_score
         behavioral_score = request.behavioral_score
         temporal_score = request.temporal_score
-        graph_available = behavioral_available = temporal_available = True
-
-    else:
-        # Call upstream APIs asynchronously; fall back to provided scores if any API fails
-        upstream_g, upstream_b, upstream_t = await _fetch_upstream_scores(transaction_id)
-        graph_score = upstream_g if upstream_g is not None else request.graph_score
-        behavioral_score = upstream_b if upstream_b is not None else request.behavioral_score
-        temporal_score = upstream_t if upstream_t is not None else request.temporal_score
         graph_available = graph_score is not None
         behavioral_available = behavioral_score is not None
         temporal_available = temporal_score is not None
 
-    # ── Step 2: Fuse scores via meta-classifier ───────────────────────────────
+    # ── Step 2: Fuse scores via meta-classifier ──────────────────────────────
     fusion = meta_classifier.fuse(
         graph_score=graph_score if graph_available else None,
         behavioral_score=behavioral_score if behavioral_available else None,
@@ -321,7 +373,13 @@ async def analyze(request: AnalyzeRequest):
     # ── Step 4: LLM forensic report generation ───────────────────────────────
     forensic_report = None
     if forensic_reporter is not None:
-        from backend.rag.prompt_builder import build_chain_of_evidence_prompt
+        from backend.rag.prompt_builder import build_chain_of_evidence_prompt, UpstreamContext
+
+        upstream_ctx = UpstreamContext(
+            behavioral_signal_summary=behavioral_signal,
+            graph_signal_summary=graph_signal,
+            temporal_signal_summary=temporal_signal,
+        )
 
         prompt_package = build_chain_of_evidence_prompt(
             transaction_id=transaction_id,
@@ -333,6 +391,7 @@ async def analyze(request: AnalyzeRequest):
             behavioral_available=fusion.behavioral_available,
             temporal_available=fusion.temporal_available,
             retrieval=top_retrieval,
+            upstream_context=upstream_ctx,
         )
         try:
             forensic_report = forensic_reporter.generate_report(prompt_package)
@@ -340,7 +399,7 @@ async def analyze(request: AnalyzeRequest):
             logger.error(f"LLM generation failed: {e}")
             forensic_report = f"[LLM ERROR] Report generation failed: {e}"
 
-    # ── Optional baseline (no RAG context) for ablation / novelty demonstration ─
+    # ── Optional baseline (no RAG context) for ablation ─────────────────────
     baseline_report = None
     if request.include_baseline and forensic_reporter is not None:
         from backend.rag.prompt_builder import build_baseline_prompt
@@ -378,115 +437,9 @@ async def analyze(request: AnalyzeRequest):
         forensic_report=forensic_report,
         baseline_report=baseline_report,
         mock_scenario=mock_scenario_used,
-    )
-
-
-class TransactionRequest(BaseModel):
-    transaction_id: Optional[str] = None
-    step: int = Field(ge=1, le=744, description="PaySim simulation hour")
-    type: str = Field(description="TRANSFER | CASH_OUT | CASH_IN | PAYMENT | DEBIT")
-    amount: float = Field(ge=0)
-    nameOrig: str
-    nameDest: str
-    oldbalanceOrg: float = Field(ge=0)
-    newbalanceOrig: float = Field(ge=0)
-    oldbalanceDest: float = Field(ge=0)
-    newbalanceDest: float = Field(ge=0)
-    isFlaggedFraud: int = Field(default=0, ge=0, le=1)
-    mock_scenario: Optional[str] = Field(default=None)
-
-
-def _infer_scenario(req: TransactionRequest) -> str:
-    """Heuristically pick the closest fraud scenario from transaction features."""
-    if req.mock_scenario:
-        return req.mock_scenario
-    if req.type not in ("TRANSFER", "CASH_OUT"):
-        return "legitimate"
-    drain_ratio = req.amount / req.oldbalanceOrg if req.oldbalanceOrg > 0 else 0
-    dest_was_empty = req.oldbalanceDest == 0
-    if drain_ratio >= 0.95 and dest_was_empty:
-        return "layering"
-    if drain_ratio >= 0.95:
-        return "mule_network"
-    if req.amount < 10000:
-        return "smurfing"
-    if req.type == "CASH_OUT" and drain_ratio > 0.5:
-        return "velocity_fraud"
-    return "account_takeover"
-
-
-@app.post("/analyze/transaction", response_model=AnalyzeResponse)
-async def analyze_transaction(req: TransactionRequest):
-    """
-    Accept a full PaySim-style transaction and run the complete pipeline using
-    heuristic mock scores derived from the transaction features. Used for demo
-    and presentation when upstream model APIs are not yet deployed.
-    """
-    transaction_id = req.transaction_id or f"TX_{req.nameOrig}_{req.step}"
-    scenario = _infer_scenario(req)
-
-    from backend.mock_scores import generate_mock_scores, FraudScenario
-    try:
-        fs = FraudScenario(scenario)
-    except ValueError:
-        fs = FraudScenario.RANDOM
-    mock = generate_mock_scores(scenario=fs)
-
-    fusion = meta_classifier.fuse(
-        graph_score=mock.graph_score,
-        behavioral_score=mock.behavioral_score,
-        temporal_score=mock.temporal_score,
-    )
-    retrievals = retriever.retrieve(
-        graph_score=fusion.graph_score,
-        behavioral_score=fusion.behavioral_score,
-        temporal_score=fusion.temporal_score,
-        confidence_score=fusion.confidence_score,
-    )
-    if not retrievals:
-        raise HTTPException(status_code=500, detail="RAG retrieval returned no results.")
-    top_retrieval = retrievals[0]
-
-    forensic_report = None
-    if forensic_reporter is not None:
-        from backend.rag.prompt_builder import build_chain_of_evidence_prompt
-        prompt_package = build_chain_of_evidence_prompt(
-            transaction_id=transaction_id,
-            graph_score=fusion.graph_score,
-            behavioral_score=fusion.behavioral_score,
-            temporal_score=fusion.temporal_score,
-            confidence_score=fusion.confidence_score,
-            graph_available=fusion.graph_available,
-            behavioral_available=fusion.behavioral_available,
-            temporal_available=fusion.temporal_available,
-            retrieval=top_retrieval,
-        )
-        try:
-            forensic_report = forensic_reporter.generate_report(prompt_package)
-        except Exception as e:
-            forensic_report = f"[LLM ERROR] {e}"
-
-    return AnalyzeResponse(
-        transaction_id=transaction_id,
-        fraud_confidence_score=fusion.confidence_score,
-        classification=_classify(fusion.confidence_score),
-        graph_score=fusion.graph_score,
-        behavioral_score=fusion.behavioral_score,
-        temporal_score=fusion.temporal_score,
-        graph_available=fusion.graph_available,
-        behavioral_available=fusion.behavioral_available,
-        temporal_available=fusion.temporal_available,
-        modalities_used=fusion.modalities_used,
-        retrieval=RetrievalInfo(
-            typology_id=top_retrieval.typology_id,
-            typology_name=top_retrieval.typology_name,
-            stage=top_retrieval.stage,
-            risk_level=top_retrieval.risk_level,
-            similarity_score=top_retrieval.similarity_score,
-        ),
-        forensic_report=forensic_report,
-        baseline_report=None,
-        mock_scenario=mock.scenario,
+        behavioral_signal=behavioral_signal,
+        graph_signal=graph_signal,
+        temporal_signal=temporal_signal,
     )
 
 
