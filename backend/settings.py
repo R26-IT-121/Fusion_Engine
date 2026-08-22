@@ -1,153 +1,160 @@
 """
-Configuration management for risk managers, thresholds, and alert settings.
-Uses JSON file for persistence (can be upgraded to database).
+Risk manager recipients and alert thresholds.
+
+Database-backed so the same configuration is seen from every machine — a risk
+manager added on one device receives alerts regardless of where analysis runs.
 """
 
-import json
 import logging
-from dataclasses import dataclass, asdict
-from typing import List, Optional
+from typing import Optional
 
-from backend import config
+from fastapi import HTTPException
+from sqlalchemy import func, select
+
+from backend.db.models import AlertSettings, RiskManager
+from backend.db.session import get_session
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_FILE = config.get_path("paths", "runtime_settings")
+
+# ── Alert settings (single row) ──────────────────────────────────────────────
 
 
-@dataclass
-class RiskManager:
-    """Risk manager contact info"""
-
-    name: str
-    email: str
-    role: str = "Risk Manager"
-    enabled: bool = True
-
-
-@dataclass
-class AlertSettings:
-    """Fraud alert configuration"""
-
-    fraud_threshold: float = 0.6  # Alert if confidence > this
-    include_low_risk: bool = False
-    include_medium_risk: bool = True
-    include_high_risk: bool = True
-    include_critical_risk: bool = True
-    send_to_all: bool = True  # vs. role-based routing
+async def get_alert_settings() -> AlertSettings:
+    async with get_session() as db:
+        settings = await db.scalar(select(AlertSettings).where(AlertSettings.id == 1))
+        if settings is None:
+            settings = AlertSettings(id=1)
+            db.add(settings)
+            await db.flush()
+            await db.refresh(settings)
+        return settings
 
 
-@dataclass
-class Configuration:
-    """Complete system configuration"""
-
-    risk_managers: List[RiskManager]
-    alert_settings: AlertSettings
-    backend_url: str = "http://localhost:8000"
-
-
-def load_config() -> Configuration:
-    """Load configuration from file or return defaults."""
-    if not SETTINGS_FILE.exists():
-        logger.info("Settings file not found, creating with defaults")
-        default = Configuration(
-            risk_managers=[
-                RiskManager(name="Default Admin", email="admin@deepsentinel.io"),
-            ],
-            alert_settings=AlertSettings(),
-            backend_url="http://localhost:8000",
+async def update_alert_settings(changes: dict, actor: Optional[str] = None) -> AlertSettings:
+    """Apply a partial update. Unknown keys are rejected rather than ignored, so
+    a typo surfaces instead of silently doing nothing."""
+    allowed = {
+        "fraud_threshold",
+        "include_low_risk",
+        "include_medium_risk",
+        "include_high_risk",
+        "include_critical_risk",
+        "send_to_all",
+        "backend_url",
+    }
+    unknown = set(changes) - allowed
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown setting(s): {', '.join(sorted(unknown))}. "
+                   f"Valid: {', '.join(sorted(allowed))}",
         )
-        save_config(default)
-        return default
 
-    try:
-        with open(SETTINGS_FILE) as f:
-            data = json.load(f)
-            risk_managers = [
-                RiskManager(**rm) for rm in data.get("risk_managers", [])
-            ]
-            alert_settings_data = data.get("alert_settings", {})
-            alert_settings = AlertSettings(**alert_settings_data)
-            backend_url = data.get("backend_url", "http://localhost:8000")
-            return Configuration(
-                risk_managers=risk_managers,
-                alert_settings=alert_settings,
-                backend_url=backend_url,
+    if "fraud_threshold" in changes:
+        try:
+            threshold = float(changes["fraud_threshold"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="fraud_threshold must be a number")
+        if not 0.0 <= threshold <= 1.0:
+            raise HTTPException(
+                status_code=422, detail="fraud_threshold must be between 0 and 1"
             )
-    except Exception as e:
-        logger.error(f"Failed to load config: {e}, using defaults")
-        return Configuration(
-            risk_managers=[
-                RiskManager(name="Default Admin", email="admin@deepsentinel.io"),
-            ],
-            alert_settings=AlertSettings(),
+        changes["fraud_threshold"] = threshold
+
+    async with get_session() as db:
+        settings = await db.scalar(select(AlertSettings).where(AlertSettings.id == 1))
+        if settings is None:
+            settings = AlertSettings(id=1)
+            db.add(settings)
+
+        for key, value in changes.items():
+            setattr(settings, key, value)
+        await db.flush()
+        await db.refresh(settings)
+
+    logger.info(f"Alert settings updated by {actor}: {sorted(changes)}")
+    return settings
+
+
+# ── Risk managers ────────────────────────────────────────────────────────────
+
+
+async def list_risk_managers() -> list[RiskManager]:
+    async with get_session() as db:
+        result = await db.scalars(select(RiskManager).order_by(RiskManager.created_at))
+        return list(result)
+
+
+async def add_risk_manager(
+    name: str, email: str, role: str = "Risk Manager"
+) -> RiskManager:
+    email = email.strip().lower()
+    async with get_session() as db:
+        existing = await db.scalar(
+            select(RiskManager).where(func.lower(RiskManager.email) == email)
         )
+        if existing is not None:
+            raise HTTPException(
+                status_code=409, detail=f"{email} is already receiving alerts"
+            )
+
+        manager = RiskManager(name=name.strip(), email=email, role=role)
+        db.add(manager)
+        await db.flush()
+        await db.refresh(manager)
+
+    logger.info(f"Risk manager added: {email}")
+    return manager
 
 
-def save_config(config: Configuration) -> bool:
-    """Save configuration to file."""
-    try:
-        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "risk_managers": [asdict(rm) for rm in config.risk_managers],
-            "alert_settings": asdict(config.alert_settings),
-            "backend_url": config.backend_url,
-        }
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.info(f"Config saved: {SETTINGS_FILE}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to save config: {e}")
-        return False
+async def remove_risk_manager(email: str) -> None:
+    email = email.strip().lower()
+    async with get_session() as db:
+        manager = await db.scalar(
+            select(RiskManager).where(func.lower(RiskManager.email) == email)
+        )
+        if manager is None:
+            raise HTTPException(status_code=404, detail=f"{email} is not on the alert list")
+        await db.delete(manager)
+
+    logger.info(f"Risk manager removed: {email}")
 
 
-def add_risk_manager(name: str, email: str, role: str = "Risk Manager") -> bool:
-    """Add a new risk manager."""
-    config = load_config()
-    if any(rm.email == email for rm in config.risk_managers):
-        logger.warning(f"Risk manager {email} already exists")
-        return False
-    config.risk_managers.append(RiskManager(name=name, email=email, role=role))
-    return save_config(config)
+async def set_risk_manager_enabled(email: str, enabled: bool) -> RiskManager:
+    email = email.strip().lower()
+    async with get_session() as db:
+        manager = await db.scalar(
+            select(RiskManager).where(func.lower(RiskManager.email) == email)
+        )
+        if manager is None:
+            raise HTTPException(status_code=404, detail=f"{email} is not on the alert list")
+        manager.enabled = enabled
+        await db.flush()
+        await db.refresh(manager)
+        return manager
 
 
-def remove_risk_manager(email: str) -> bool:
-    """Remove a risk manager by email."""
-    config = load_config()
-    original_count = len(config.risk_managers)
-    config.risk_managers = [rm for rm in config.risk_managers if rm.email != email]
-    if len(config.risk_managers) < original_count:
-        return save_config(config)
-    logger.warning(f"Risk manager {email} not found")
-    return False
+async def get_alert_recipients() -> list[str]:
+    """Email addresses that should receive a fraud alert right now."""
+    async with get_session() as db:
+        result = await db.scalars(
+            select(RiskManager.email).where(RiskManager.enabled.is_(True))
+        )
+        return list(result)
 
 
-def get_enabled_risk_manager_emails() -> List[str]:
-    """Get list of enabled risk manager emails."""
-    config = load_config()
-    return [rm.email for rm in config.risk_managers if rm.enabled]
-
-
-def get_all_risk_managers() -> List[RiskManager]:
-    """Get all risk managers."""
-    config = load_config()
-    return config.risk_managers
-
-
-def should_alert(classification: str) -> bool:
-    """Check if should send alert for this classification."""
-    config = load_config()
-    alerts = config.alert_settings
+async def should_alert(classification: str) -> bool:
+    """Whether this classification is configured to trigger an alert."""
+    settings = await get_alert_settings()
     return {
-        "CRITICAL": alerts.include_critical_risk,
-        "HIGH": alerts.include_high_risk,
-        "MEDIUM": alerts.include_medium_risk,
-        "LOW": alerts.include_low_risk,
+        "CRITICAL": settings.include_critical_risk,
+        "HIGH": settings.include_high_risk,
+        "MEDIUM": settings.include_medium_risk,
+        "LOW": settings.include_low_risk,
     }.get(classification, False)
 
 
-def get_backend_url() -> str:
-    """Get configured backend URL for emails."""
-    config = load_config()
-    return config.backend_url
+async def get_backend_url() -> str:
+    settings = await get_alert_settings()
+    return settings.backend_url

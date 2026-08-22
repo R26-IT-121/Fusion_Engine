@@ -79,9 +79,26 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("llm", "ollama_base_url", "OLLAMA_BASE_URL", "http://localhost:11434"),
     Setting("llm", "ollama_model", "OLLAMA_MODEL", "llama3"),
 
+    # --- database ---
+    # SQLite default means a fresh clone runs with zero setup. Point this at a
+    # Postgres URL for anything shared between machines or people.
+    Setting("database", "url", "DATABASE_URL", "sqlite+aiosqlite:///./deepsentinel.db",
+            secret=True,
+            description="SQLAlchemy URL. Postgres for shared/cloud, SQLite for local-only"),
+    Setting("database", "pool_size", "DB_POOL_SIZE", 5, cast=int,
+            description="Connection pool size (Postgres only)"),
+    Setting("database", "max_overflow", "DB_MAX_OVERFLOW", 10, cast=int,
+            description="Connections allowed beyond pool_size (Postgres only)"),
+    Setting("database", "echo_sql", "DB_ECHO_SQL", False, cast=_as_bool,
+            description="Log every SQL statement — debugging only, noisy"),
+
     # --- auth ---
     Setting("auth", "access_token_expire_minutes", "ACCESS_TOKEN_EXPIRE_MINUTES", 480, cast=int,
             description="Session lifetime in minutes"),
+    Setting("auth", "max_failed_logins", "MAX_FAILED_LOGINS", 5, cast=int,
+            description="Failed attempts before an account is temporarily locked"),
+    Setting("auth", "lockout_minutes", "LOCKOUT_MINUTES", 15, cast=int,
+            description="How long an account stays locked"),
 
     # --- email ---
     Setting("email", "sender_email", "SENDER_EMAIL", "alerts@deepsentinel.io"),

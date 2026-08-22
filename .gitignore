@@ -6,6 +6,12 @@ config.ini
 # User database — contains password hashes, never commit
 users.json
 
+# Local SQLite database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Runtime configuration written by the app
 settings.json
 

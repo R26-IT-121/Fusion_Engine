@@ -18,11 +18,22 @@ from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from backend import config
+from backend.auth import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    LoginRequest,
+    PasswordChange,
+    UserCreate,
+    UserOut,
+    get_current_user,
+    require_admin,
+    require_manager,
+)
+from backend.db.models import User
 
 # .env is still read so environment variables set there override config.ini,
 # which keeps existing docker-compose and platform deploys working unchanged.
@@ -76,6 +87,13 @@ async def lifespan(app: FastAPI):
         )
     logger.info(config.describe())
 
+    logger.info("Connecting to database...")
+    from backend.auth import ensure_bootstrap_admin
+    from backend.db.session import init_db
+
+    await init_db()
+    await ensure_bootstrap_admin()
+
     logger.info("Initializing FATF Knowledge Base...")
     knowledge_base = FATFKnowledgeBase(
         chroma_db_path=CHROMA_DB_PATH,
@@ -104,6 +122,10 @@ async def lifespan(app: FastAPI):
 
     logger.info("=== DeepSentinel ready. ===")
     yield
+
+    from backend.db.session import close_db
+
+    await close_db()
     logger.info("DeepSentinel shutting down.")
 
 
@@ -487,78 +509,95 @@ async def rebuild_knowledge_base():
 
 class RiskManagerRequest(BaseModel):
     name: str
-    email: str
+    email: EmailStr
     role: str = "Risk Manager"
 
 
-@app.get("/settings")
-async def get_settings():
-    """Get current system settings including risk managers."""
-    from backend.settings import load_config
+@app.get("/settings", tags=["settings"])
+async def get_settings(user: User = Depends(require_manager)):
+    """Read risk managers and alert thresholds. Admin or risk manager."""
+    from backend.settings import get_alert_settings, list_risk_managers
 
-    config = load_config()
+    managers = await list_risk_managers()
+    alerts = await get_alert_settings()
     return {
         "risk_managers": [
-            {"name": rm.name, "email": rm.email, "role": rm.role, "enabled": rm.enabled}
-            for rm in config.risk_managers
+            {"name": m.name, "email": m.email, "role": m.role, "enabled": m.enabled}
+            for m in managers
         ],
         "alert_settings": {
-            "fraud_threshold": config.alert_settings.fraud_threshold,
-            "include_low_risk": config.alert_settings.include_low_risk,
-            "include_medium_risk": config.alert_settings.include_medium_risk,
-            "include_high_risk": config.alert_settings.include_high_risk,
-            "include_critical_risk": config.alert_settings.include_critical_risk,
+            "fraud_threshold": alerts.fraud_threshold,
+            "include_low_risk": alerts.include_low_risk,
+            "include_medium_risk": alerts.include_medium_risk,
+            "include_high_risk": alerts.include_high_risk,
+            "include_critical_risk": alerts.include_critical_risk,
+            "send_to_all": alerts.send_to_all,
         },
-        "backend_url": config.backend_url,
+        "backend_url": alerts.backend_url,
     }
 
 
-@app.post("/settings/risk-manager")
-async def add_risk_manager(req: RiskManagerRequest):
-    """Add a new risk manager for fraud alerts."""
-    from backend.settings import add_risk_manager as add_rm
+@app.post("/settings/risk-manager", status_code=201, tags=["settings"])
+async def add_risk_manager_endpoint(
+    req: RiskManagerRequest, user: User = Depends(require_manager)
+):
+    """Add a fraud alert recipient. Admin or risk manager."""
+    from backend.auth import audit
+    from backend.settings import add_risk_manager
 
-    success = add_rm(name=req.name, email=req.email, role=req.role)
-    if not success:
-        raise HTTPException(
-            status_code=400, detail=f"Risk manager {req.email} already exists"
-        )
-    return {"status": "added", "email": req.email}
+    manager = await add_risk_manager(name=req.name, email=req.email, role=req.role)
+    await audit("risk_manager.add", actor=user.username, target=manager.email)
+    return {"status": "added", "email": manager.email}
 
 
-@app.delete("/settings/risk-manager/{email}")
-async def remove_risk_manager(email: str):
-    """Remove a risk manager."""
-    from backend.settings import remove_risk_manager as remove_rm
+@app.delete("/settings/risk-manager/{email}", tags=["settings"])
+async def remove_risk_manager_endpoint(
+    email: str, user: User = Depends(require_manager)
+):
+    """Remove a fraud alert recipient. Admin or risk manager."""
+    from backend.auth import audit
+    from backend.settings import remove_risk_manager
 
-    success = remove_rm(email=email)
-    if not success:
-        raise HTTPException(status_code=404, detail=f"Risk manager {email} not found")
+    await remove_risk_manager(email)
+    await audit("risk_manager.remove", actor=user.username, target=email)
     return {"status": "removed", "email": email}
 
 
-@app.post("/settings/alert-settings")
-async def update_alert_settings(settings: dict):
-    """Update fraud alert thresholds and preferences."""
-    from backend.settings import load_config, save_config, AlertSettings
+@app.post("/settings/alert-settings", tags=["settings"])
+async def update_alert_settings_endpoint(
+    settings: dict, user: User = Depends(require_manager)
+):
+    """Update alert thresholds. Admin or risk manager."""
+    from backend.auth import audit
+    from backend.settings import update_alert_settings
 
-    config = load_config()
-    for key, value in settings.items():
-        if hasattr(config.alert_settings, key):
-            setattr(config.alert_settings, key, value)
-    save_config(config)
-    return {"status": "updated", "alert_settings": settings}
+    updated = await update_alert_settings(settings, actor=user.username)
+    await audit(
+        "settings.update", actor=user.username, detail=f"keys={sorted(settings)}"
+    )
+    return {
+        "status": "updated",
+        "alert_settings": {
+            "fraud_threshold": updated.fraud_threshold,
+            "include_low_risk": updated.include_low_risk,
+            "include_medium_risk": updated.include_medium_risk,
+            "include_high_risk": updated.include_high_risk,
+            "include_critical_risk": updated.include_critical_risk,
+            "send_to_all": updated.send_to_all,
+        },
+    }
 
 
-@app.post("/settings/backend-url")
-async def update_backend_url(url: dict):
-    """Update backend URL for email links."""
-    from backend.settings import load_config, save_config
+@app.post("/settings/backend-url", tags=["settings"])
+async def update_backend_url(payload: dict, user: User = Depends(require_admin)):
+    """Set the dashboard URL used in alert email links. Admin only."""
+    from backend.settings import update_alert_settings
 
-    config = load_config()
-    config.backend_url = url.get("url", "http://localhost:8000")
-    save_config(config)
-    return {"status": "updated", "backend_url": config.backend_url}
+    updated = await update_alert_settings(
+        {"backend_url": payload.get("url", "http://localhost:8000")},
+        actor=user.username,
+    )
+    return {"status": "updated", "backend_url": updated.backend_url}
 
 
 @app.get("/email-template/preview")
@@ -586,13 +625,15 @@ async def preview_email_template(classification: str = "HIGH"):
 
     from backend.settings import get_backend_url
 
-    html = build_email_html(test_alert, get_backend_url())
+    html = build_email_html(test_alert, await get_backend_url())
     return HTMLResponse(content=html)
 
 
-@app.post("/email/send-test")
-async def send_test_email(req: RiskManagerRequest):
-    """Send a test email to verify Gmail/SendGrid configuration."""
+@app.post("/email/send-test", tags=["email"])
+async def send_test_email(
+    req: RiskManagerRequest, user: User = Depends(require_manager)
+):
+    """Send a test fraud alert to verify email delivery. Admin or risk manager."""
     from backend.email_service import send_fraud_alert, FraudAlert
     from datetime import datetime
 
@@ -615,14 +656,19 @@ async def send_test_email(req: RiskManagerRequest):
     from backend.settings import get_backend_url
 
     success = await send_fraud_alert(
-        test_alert, [req.email], backend_url=get_backend_url()
+        test_alert, [req.email], backend_url=await get_backend_url()
     )
     if not success:
         raise HTTPException(
-            status_code=500,
-            detail="Email send failed. Check Gmail app password or SendGrid API key in .env",
+            status_code=502,
+            detail="Email provider rejected the send. Check the SendGrid API key "
+                   "and that the sender address is verified.",
         )
-    return {"status": "sent", "recipient": req.email, "note": "Check spam folder if not received"}
+    return {
+        "status": "sent",
+        "recipient": req.email,
+        "note": "Check the spam folder if it does not arrive.",
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -630,26 +676,19 @@ async def send_test_email(req: RiskManagerRequest):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-@app.post("/auth/login")
-async def login(req: dict):
-    """Login user and return JWT token."""
-    from backend.auth import authenticate_user, create_access_token, TokenResponse
+@app.post("/auth/login", tags=["auth"])
+async def login(req: LoginRequest, request: Request):
+    """Exchange credentials for a JWT."""
+    from backend.auth import authenticate_user, create_access_token
 
-    username = req.get("username")
-    password = req.get("password")
+    client_ip = request.client.host if request.client else None
+    user = await authenticate_user(req.username, req.password, client_ip=client_ip)
+    token = create_access_token(user)
 
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="Username and password required")
-
-    user = authenticate_user(username, password)
-    if not user:
-        logger.warning(f"Failed login attempt: {username}")
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-
-    token = create_access_token(user.username, user.role)
     return {
         "access_token": token,
         "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "user": {
             "username": user.username,
             "email": user.email,
@@ -659,54 +698,101 @@ async def login(req: dict):
     }
 
 
-@app.post("/auth/register")
-async def register(req: dict):
-    """Register new user (admin only)."""
-    from backend.auth import create_user, UserCreate, get_current_user, UserRole
-
-    # Only admin can create users
-    try:
-        current_user = get_current_user(Header(req.get("authorization", "")))
-        if current_user.role != UserRole.ADMIN:
-            raise HTTPException(status_code=403, detail="Only admins can create users")
-    except:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    try:
-        user_create = UserCreate(
-            username=req.get("username"),
-            email=req.get("email"),
-            full_name=req.get("full_name"),
-            password=req.get("password"),
-            role=req.get("role", UserRole.ANALYST),
-        )
-        user = create_user(user_create)
-        return {"status": "created", "username": user.username}
-    except Exception as e:
-        logger.error(f"User creation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+@app.get("/auth/me", tags=["auth"])
+async def get_me(user: User = Depends(get_current_user)):
+    """Current user."""
+    return UserOut.from_model(user)
 
 
-@app.get("/auth/me")
-async def get_me(authorization: Optional[str] = Header(None)):
-    """Get current user info."""
-    from backend.auth import get_current_user
+@app.post("/auth/logout", tags=["auth"])
+async def logout(user: User = Depends(get_current_user)):
+    """Record a logout. The client discards the token; JWTs are stateless."""
+    from backend.auth import audit
 
-    user = get_current_user(authorization)
-    return {
-        "username": user.username,
-        "email": user.email,
-        "full_name": user.full_name,
-        "role": user.role,
-        "last_login": user.last_login,
-    }
-
-
-@app.post("/auth/logout")
-async def logout(authorization: Optional[str] = Header(None)):
-    """Logout user (token invalidation handled client-side)."""
-    from backend.auth import get_current_user
-
-    user = get_current_user(authorization)
-    logger.info(f"User logged out: {user.username}")
+    await audit("auth.logout", actor=user.username)
     return {"status": "logged_out"}
+
+
+@app.post("/auth/change-password", tags=["auth"])
+async def change_own_password(
+    req: PasswordChange, user: User = Depends(get_current_user)
+):
+    """Change your own password. Invalidates existing sessions."""
+    from backend.auth import change_password
+
+    await change_password(user.username, req.current_password, req.new_password)
+    return {"status": "changed", "note": "Sign in again with the new password."}
+
+
+# ── User administration (admin only) ─────────────────────────────────────────
+
+
+@app.get("/users", tags=["users"])
+async def list_users_endpoint(user: User = Depends(require_admin)):
+    """List all users. Admin only."""
+    from backend.auth import list_users
+
+    return [UserOut.from_model(u) for u in await list_users()]
+
+
+@app.post("/users", status_code=201, tags=["users"])
+async def create_user_endpoint(req: UserCreate, user: User = Depends(require_admin)):
+    """Create a user. Admin only."""
+    from backend.auth import create_user
+
+    created = await create_user(req, created_by=user.username)
+    return UserOut.from_model(created)
+
+
+@app.patch("/users/{username}/enabled", tags=["users"])
+async def set_user_enabled_endpoint(
+    username: str, payload: dict, user: User = Depends(require_admin)
+):
+    """Enable or disable a user. Admin only."""
+    from backend.auth import set_user_enabled
+
+    enabled = bool(payload.get("enabled", True))
+    if username == user.username and not enabled:
+        raise HTTPException(status_code=409, detail="You cannot disable your own account")
+
+    await set_user_enabled(username, enabled, actor=user.username)
+    return {"status": "updated", "username": username, "enabled": enabled}
+
+
+@app.delete("/users/{username}", tags=["users"])
+async def delete_user_endpoint(username: str, user: User = Depends(require_admin)):
+    """Delete a user. Admin only. The last admin cannot be removed."""
+    from backend.auth import delete_user
+
+    if username == user.username:
+        raise HTTPException(status_code=409, detail="You cannot delete your own account")
+
+    await delete_user(username, actor=user.username)
+    return {"status": "deleted", "username": username}
+
+
+@app.get("/audit-log", tags=["users"])
+async def get_audit_log(limit: int = 100, user: User = Depends(require_admin)):
+    """Recent security events, newest first. Admin only."""
+    from sqlalchemy import select
+
+    from backend.db.models import AuditLog
+    from backend.db.session import get_session
+
+    limit = max(1, min(limit, 500))
+    async with get_session() as db:
+        rows = await db.scalars(
+            select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(limit)
+        )
+        return [
+            {
+                "timestamp": r.timestamp,
+                "actor": r.actor,
+                "action": r.action,
+                "target": r.target,
+                "outcome": r.outcome,
+                "client_ip": r.client_ip,
+                "detail": r.detail,
+            }
+            for r in rows
+        ]
