@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # DeepSentinel Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deepsent-api
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_PROVIDER=gemini
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - CHROMA_DB_PATH=./chroma_store
+      - FATF_DATA_PATH=./data/fatf_typologies.json
+      - MODEL_SAVE_PATH=./models/meta_classifier.joblib
+      - BEHAVIORAL_API_BASE=http://behavioral-api:8001
+      - GRAPH_API_BASE=http://graph-api:8002
+      - TEMPORAL_API_BASE=http://temporal-api:8003
+      - UPSTREAM_TIMEOUT_MS=5000
+      - GMAIL_ADDRESS=${GMAIL_ADDRESS}
+      - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY}
+      - SENDER_EMAIL=alerts@deepsentinel.io
+      - SENDER_NAME=DeepSentinel
+    volumes:
+      - ./chroma_store:/app/chroma_store
+      - ./models:/app/models
+    networks:
+      - deepsent
+    depends_on:
+      - behavioral-api
+      - graph-api
+      - temporal-api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # DeepSentinel Web Frontend
+  web:
+    build:
+      context: ../Deepsentinel-WEB
+      dockerfile: Dockerfile
+    container_name: deepsent-web
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    networks:
+      - deepsent
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Placeholder for Member 1 (VAE) API
+  behavioral-api:
+    image: nginx:alpine
+    container_name: deepsent-behavioral
+    ports:
+      - "8001:80"
+    networks:
+      - deepsent
+    restart: unless-stopped
+
+  # Placeholder for Member 2 (GraphSAGE) API
+  graph-api:
+    image: nginx:alpine
+    container_name: deepsent-graph
+    ports:
+      - "8002:80"
+    networks:
+      - deepsent
+    restart: unless-stopped
+
+  # Placeholder for Member 3 (TCN) API
+  temporal-api:
+    image: nginx:alpine
+    container_name: deepsent-temporal
+    ports:
+      - "8003:80"
+    networks:
+      - deepsent
+    restart: unless-stopped
+
+networks:
+  deepsent:
+    driver: bridge
+
+volumes:
+  chroma_store:
+  models:
