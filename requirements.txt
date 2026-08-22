@@ -17,6 +17,9 @@ sentence-transformers==3.3.1
 # LLM - Gemini API
 google-generativeai==0.8.3
 
+# Email
+sendgrid==6.11.0
+
 # Utilities
 python-dotenv==1.0.1
 pydantic==2.10.3

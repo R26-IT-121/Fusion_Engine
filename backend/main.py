@@ -462,3 +462,148 @@ async def rebuild_knowledge_base():
         top_k=1,
     )
     return {"status": "knowledge base rebuilt"}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SETTINGS & EMAIL MANAGEMENT
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class RiskManagerRequest(BaseModel):
+    name: str
+    email: str
+    role: str = "Risk Manager"
+
+
+@app.get("/settings")
+async def get_settings():
+    """Get current system settings including risk managers."""
+    from backend.settings import load_config
+
+    config = load_config()
+    return {
+        "risk_managers": [
+            {"name": rm.name, "email": rm.email, "role": rm.role, "enabled": rm.enabled}
+            for rm in config.risk_managers
+        ],
+        "alert_settings": {
+            "fraud_threshold": config.alert_settings.fraud_threshold,
+            "include_low_risk": config.alert_settings.include_low_risk,
+            "include_medium_risk": config.alert_settings.include_medium_risk,
+            "include_high_risk": config.alert_settings.include_high_risk,
+            "include_critical_risk": config.alert_settings.include_critical_risk,
+        },
+        "backend_url": config.backend_url,
+    }
+
+
+@app.post("/settings/risk-manager")
+async def add_risk_manager(req: RiskManagerRequest):
+    """Add a new risk manager for fraud alerts."""
+    from backend.settings import add_risk_manager as add_rm
+
+    success = add_rm(name=req.name, email=req.email, role=req.role)
+    if not success:
+        raise HTTPException(
+            status_code=400, detail=f"Risk manager {req.email} already exists"
+        )
+    return {"status": "added", "email": req.email}
+
+
+@app.delete("/settings/risk-manager/{email}")
+async def remove_risk_manager(email: str):
+    """Remove a risk manager."""
+    from backend.settings import remove_risk_manager as remove_rm
+
+    success = remove_rm(email=email)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Risk manager {email} not found")
+    return {"status": "removed", "email": email}
+
+
+@app.post("/settings/alert-settings")
+async def update_alert_settings(settings: dict):
+    """Update fraud alert thresholds and preferences."""
+    from backend.settings import load_config, save_config, AlertSettings
+
+    config = load_config()
+    for key, value in settings.items():
+        if hasattr(config.alert_settings, key):
+            setattr(config.alert_settings, key, value)
+    save_config(config)
+    return {"status": "updated", "alert_settings": settings}
+
+
+@app.post("/settings/backend-url")
+async def update_backend_url(url: dict):
+    """Update backend URL for email links."""
+    from backend.settings import load_config, save_config
+
+    config = load_config()
+    config.backend_url = url.get("url", "http://localhost:8000")
+    save_config(config)
+    return {"status": "updated", "backend_url": config.backend_url}
+
+
+@app.get("/email-template/preview")
+async def preview_email_template(classification: str = "HIGH"):
+    """Preview email template (returns HTML)."""
+    from backend.email_service import FraudAlert, build_email_html
+    from datetime import datetime
+    from fastapi.responses import HTMLResponse
+
+    test_alert = FraudAlert(
+        transaction_id="PREVIEW_TX_001",
+        fraud_confidence=0.75 if classification == "MEDIUM" else 0.87,
+        classification=classification,
+        timestamp=datetime.now().isoformat(),
+        graph_score=0.85,
+        behavioral_score=0.88,
+        temporal_score=0.90,
+        graph_signal="Graph pattern: HUB_AND_SPOKE. Convergence count: 3 distinct senders. Fresh sender ratio: 66.7%.",
+        behavioral_signal="Anomaly fingerprint - Signal 1: High reconstruction error in transaction velocity. Signal 2: KL divergence indicates unusual feature distribution.",
+        temporal_signal="Step burstiness coefficient: 0.92 (significantly elevated). Triggering predecessor detected in 12 transactions.",
+        forensic_report="This transaction exhibits multiple correlated fraud signals across all modalities. The network analysis reveals a hub-and-spoke pattern typical of money mule operations. Behavioral analysis detects anomalous reconstruction errors suggesting coordinated activity. Temporal analysis shows elevated burstiness indicating rapid, automated transfers. FATF classification: MULE_NETWORK. Recommended action: FLAG_FOR_REVIEW.",
+        typology_name="Mule Network - Hub and Spoke",
+        typology_id="TY_001_MULE",
+    )
+
+    from backend.settings import get_backend_url
+
+    html = build_email_html(test_alert, get_backend_url())
+    return HTMLResponse(content=html)
+
+
+@app.post("/email/send-test")
+async def send_test_email(req: RiskManagerRequest):
+    """Send a test email to verify Gmail/SendGrid configuration."""
+    from backend.email_service import send_fraud_alert, FraudAlert
+    from datetime import datetime
+
+    test_alert = FraudAlert(
+        transaction_id="TEST_TX_001",
+        fraud_confidence=0.87,
+        classification="HIGH",
+        timestamp=datetime.now().isoformat(),
+        graph_score=0.85,
+        behavioral_score=0.88,
+        temporal_score=0.90,
+        graph_signal="Graph pattern: HUB_AND_SPOKE. Convergence count: 3 distinct senders.",
+        behavioral_signal="High reconstruction error detected in spending patterns. DSAA score: 0.88",
+        temporal_signal="Step burstiness coefficient: 0.92 (high velocity activity). Triggering predecessor detected.",
+        forensic_report="This transaction exhibits multiple fraud signals: Hub-and-spoke network pattern in sender graph, anomalous behavioral reconstruction error, and high temporal burstiness. Combined risk confidence 87%. Recommended action: BLOCK_TRANSACTION.",
+        typology_name="Mule Network - Hub and Spoke",
+        typology_id="TY_001_MULE",
+    )
+
+    from backend.settings import get_backend_url
+
+    success = await send_fraud_alert(
+        test_alert, [req.email], backend_url=get_backend_url()
+    )
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail="Email send failed. Check Gmail app password or SendGrid API key in .env",
+        )
+    return {"status": "sent", "recipient": req.email, "note": "Check spam folder if not received"}
