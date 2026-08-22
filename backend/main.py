@@ -139,11 +139,26 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS. The wildcard is fine for local development, but a deployment that
+# accepts bearer tokens should name its frontend origin explicitly — otherwise
+# any page on the internet can call this API with a victim's token.
+_cors_raw = str(config.get("auth", "cors_origins")).strip()
+_cors_origins = (
+    ["*"] if _cors_raw == "*" else [o.strip() for o in _cors_raw.split(",") if o.strip()]
+)
+
+if _cors_origins == ["*"] and config.is_production():
+    logger.warning(
+        "CORS is set to '*' in production. Set CORS_ORIGINS to your frontend "
+        "origin so other sites cannot call this API with a user's token."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_origins != ["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -776,7 +791,7 @@ async def get_audit_log(limit: int = 100, user: User = Depends(require_admin)):
     """Recent security events, newest first. Admin only."""
     from sqlalchemy import select
 
-    from backend.db.models import AuditLog
+    from backend.db.models import AuditLog, as_utc
     from backend.db.session import get_session
 
     limit = max(1, min(limit, 500))
@@ -784,9 +799,11 @@ async def get_audit_log(limit: int = 100, user: User = Depends(require_admin)):
         rows = await db.scalars(
             select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(limit)
         )
+        # as_utc: SQLite returns naive datetimes, and a naive ISO string is read
+        # as local time by the browser, shifting every audit entry.
         return [
             {
-                "timestamp": r.timestamp,
+                "timestamp": as_utc(r.timestamp),
                 "actor": r.actor,
                 "action": r.action,
                 "target": r.target,

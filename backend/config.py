@@ -95,6 +95,8 @@ SETTINGS: tuple[Setting, ...] = (
     # --- auth ---
     Setting("auth", "access_token_expire_minutes", "ACCESS_TOKEN_EXPIRE_MINUTES", 480, cast=int,
             description="Session lifetime in minutes"),
+    Setting("auth", "cors_origins", "CORS_ORIGINS", "*",
+            description="Comma-separated allowed origins. '*' is development only"),
     Setting("auth", "max_failed_logins", "MAX_FAILED_LOGINS", 5, cast=int,
             description="Failed attempts before an account is temporarily locked"),
     Setting("auth", "lockout_minutes", "LOCKOUT_MINUTES", 15, cast=int,

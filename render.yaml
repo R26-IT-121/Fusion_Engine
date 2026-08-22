@@ -1,3 +1,9 @@
+# Render deployment for the DeepSentinel fusion engine.
+#
+# Values marked `sync: false` are set in the Render dashboard and never
+# committed. Environment variables override config.ini, so the image ships the
+# defaults and the platform supplies the rest.
+
 services:
   - type: web
     name: deepsent-api
@@ -6,24 +12,77 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
+      # Refuse to start on a misconfiguration rather than failing at the first
+      # request. Requires JWT_SECRET_KEY to be set.
+      - key: DEEPSENTINEL_ENV
+        value: production
+
+      # --- Database ---
+      # REQUIRED. Without it the app falls back to SQLite on the container's
+      # ephemeral disk, and every user account is lost on each deploy or
+      # restart. Point this at a managed Postgres (Neon, Render Postgres, RDS).
+      - key: DATABASE_URL
+        sync: false
+
+      # --- Security ---
+      # REQUIRED. Generate with:
+      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+      # If unset, an ephemeral key is generated per process and every user is
+      # signed out on restart — and with more than one instance, sessions break
+      # unpredictably as requests land on different processes.
+      - key: JWT_SECRET_KEY
+        sync: false
+
+      # Password for the admin account created on first run. Change it after
+      # the first sign-in.
+      - key: ADMIN_BOOTSTRAP_PASSWORD
+        sync: false
+
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "480"
+
+      # --- Cross-origin ---
+      # The deployed frontend origin. Without it the browser blocks every API
+      # call from the web app.
+      - key: CORS_ORIGINS
+        sync: false
+
+      # --- LLM ---
       - key: LLM_PROVIDER
         value: gemini
       - key: GEMINI_MODEL
         value: gemini-2.0-flash
       - key: GEMINI_API_KEY
-        sync: false          # set this manually in the Render dashboard — never commit the real key
+        sync: false
+
+      # --- Email ---
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: SENDER_EMAIL
+        value: alerts@deepsentinel.io
+      - key: SENDER_NAME
+        value: DeepSentinel Fraud Alerts
+
+      # --- Paths ---
       - key: CHROMA_DB_PATH
         value: ./chroma_store
       - key: FATF_DATA_PATH
         value: ./data/fatf_typologies.json
       - key: MODEL_SAVE_PATH
         value: ./models/meta_classifier.joblib
+
+      # --- Upstream model APIs ---
+      # Base URLs only; the adapters append each model's own path. Update these
+      # as each teammate deploys.
+      - key: BEHAVIORAL_API_BASE
+        value: http://localhost:8001
+      - key: GRAPH_API_BASE
+        value: http://localhost:8002
+      - key: TEMPORAL_API_BASE
+        value: http://localhost:8003
+
+      # Real inference needs far longer than the 500 ms a mock does.
       - key: UPSTREAM_TIMEOUT_MS
-        value: "500"
-      - key: GRAPH_MODEL_URL
-        value: http://localhost:8001/api/graph/analyze   # update when Member 1 deploys
-      - key: BEHAVIORAL_MODEL_URL
-        value: http://localhost:8002/api/v1/behavioral/classify   # update when Member 2 deploys
-      - key: TEMPORAL_MODEL_URL
-        value: http://localhost:8003/api/v1/classify   # update when Member 3 deploys
+        value: "5000"

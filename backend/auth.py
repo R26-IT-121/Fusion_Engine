@@ -109,14 +109,17 @@ class UserOut(BaseModel):
 
     @classmethod
     def from_model(cls, u: User) -> "UserOut":
+        # Timestamps go out as UTC-aware. SQLite returns them naive, and a naive
+        # ISO string is interpreted by JavaScript's Date as *local* time, which
+        # silently shifts every displayed timestamp by the viewer's offset.
         return cls(
             username=u.username,
             email=u.email,
             full_name=u.full_name,
             role=u.role,
             enabled=u.enabled,
-            created_at=u.created_at,
-            last_login=u.last_login,
+            created_at=as_utc(u.created_at),
+            last_login=as_utc(u.last_login),
         )
 
 
