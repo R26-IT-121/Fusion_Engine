@@ -1,69 +1,44 @@
 # Email Configuration Guide
 
-DeepSentinel supports Gmail (for testing) and SendGrid (for production). Follow these steps to enable email fraud alerts.
+DeepSentinel uses **SendGrid** for fraud alert emails. No passwords needed - just an API key.
 
-## Option 1: Gmail SMTP (Testing)
+**Security:** We never store user passwords. Only SendGrid API key required.
 
-### Step 1: Generate Gmail App Password
+## Setup Steps
 
-1. Go to https://myaccount.google.com/apppasswords
-2. Select **Mail** and **Windows Computer** (or your device)
-3. Click **Generate**
-4. Copy the 16-character app password
+### Step 1: Create Free SendGrid Account
 
-### Step 2: Configure .env
+1. Go to https://sendgrid.com
+2. Click **Sign Up for Free**
+3. Complete the registration
+4. Verify your email
 
-Create a `.env` file in the DeepSentinel root directory:
+### Step 2: Create API Key
+
+1. Go to https://app.sendgrid.com/settings/api_keys
+2. Click **Create API Key**
+3. Name it: `DeepSentinel-Fraud-Alerts`
+4. Copy the key (you'll only see it once!)
+
+### Step 3: Configure .env
+
+Create/edit `.env` in DeepSentinel root:
 
 ```ini
-GMAIL_ADDRESS=thiyaana.vidanaarachchi@gmail.com
-GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+SENDGRID_API_KEY=SG.xxxxx_paste_your_key_here_xxxxx
+SENDER_EMAIL=alerts@deepsentinel.io
+SENDER_NAME=DeepSentinel Fraud Alerts
 ```
 
-### Step 3: Restart Backend
+### Step 4: Restart Backend
 
 ```bash
 cd C:\Projects\DeepSentinel
+pip install -r requirements.txt  # First time only
 python -m uvicorn backend.main:app --reload
 ```
 
-### Step 4: Test Email
-
-Go to http://localhost:8000/docs and try the `/email/send-test` endpoint:
-
-```json
-{
-  "name": "Risk Manager",
-  "email": "thiyaana.vidanaarachchi@gmail.com",
-  "role": "Risk Manager"
-}
-```
-
-**Note:** Emails may arrive in Spam folder initially.
-
----
-
-## Option 2: SendGrid (Production)
-
-### Step 1: Create SendGrid Account
-
-1. Sign up at https://sendgrid.com
-2. Create an API key at https://app.sendgrid.com/settings/api_keys
-3. Copy the key
-
-### Step 2: Configure .env
-
-```ini
-SENDGRID_API_KEY=SG.xxxxxxxxxxxx
-SENDER_EMAIL=alerts@deepsentinel.io
-SENDER_NAME=DeepSentinel
-```
-
-### Step 3: Restart Backend
-
-```bash
-python -m uvicorn backend.main:app --reload
-```
+✅ Backend running at http://localhost:8000
 
 ---
 
