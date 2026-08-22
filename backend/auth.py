@@ -5,24 +5,34 @@ Secure user database with JWT tokens and password hashing.
 
 import json
 import logging
+import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+import bcrypt
 import jwt
 from fastapi import HTTPException, Header
-from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 
 logger = logging.getLogger(__name__)
 
-# Configuration
-SECRET_KEY = "your-secret-key-change-in-production"  # Override with env var
+# --- Security configuration ---
+# JWT_SECRET_KEY MUST be set in production. A random key is generated if absent,
+# which invalidates all tokens on restart — acceptable for dev, fatal for prod.
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
+if not SECRET_KEY:
+    SECRET_KEY = secrets.token_urlsafe(32)
+    logger.warning(
+        "JWT_SECRET_KEY not set — generated an ephemeral key. "
+        "Sessions will be invalidated on restart. Set JWT_SECRET_KEY before deploying."
+    )
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
-PASSWORD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
-USERS_FILE = Path("./users.json")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))  # 8h
+USERS_FILE = Path(os.getenv("USERS_FILE", "./users.json"))
 
 
 class UserRole(str, Enum):
@@ -72,13 +82,18 @@ class TokenResponse(BaseModel):
 
 
 def hash_password(password: str) -> str:
-    """Hash password securely."""
-    return PASSWORD_CONTEXT.hash(password)
+    """Hash password with bcrypt."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password against hash."""
-    return PASSWORD_CONTEXT.verify(plain_password, hashed_password)
+    """Verify password against hash. Returns False on any malformed hash."""
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"), hashed_password.encode("utf-8")
+        )
+    except (ValueError, TypeError):
+        return False
 
 
 def create_access_token(username: str, role: UserRole) -> str:
@@ -114,17 +129,20 @@ def load_users() -> dict:
     """Load users from file."""
     if not USERS_FILE.exists():
         # Create default admin user
+        bootstrap_password = os.getenv("ADMIN_BOOTSTRAP_PASSWORD", "admin123")
         default_admin = User(
             username="admin",
-            email="admin@deepsent inel.io",
+            email="admin@deepsentinel.io",
             full_name="DeepSentinel Admin",
             role=UserRole.ADMIN,
-            hashed_password=hash_password("admin123"),  # CHANGE IN PRODUCTION
+            hashed_password=hash_password(bootstrap_password),
             created_at=datetime.now(timezone.utc).isoformat(),
         )
         users = {default_admin.username: default_admin.model_dump()}
         save_users(users)
-        logger.warning("Created default admin user. CHANGE PASSWORD IMMEDIATELY!")
+        logger.warning(
+            "Bootstrapped default admin user. Change this password before deploying."
+        )
         return users
 
     try:

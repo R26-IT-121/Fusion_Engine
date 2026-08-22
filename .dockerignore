@@ -2,10 +2,12 @@
 .git
 .gitignore
 
-# Environment
+# Environment & secrets — never bake into an image
 .env
 .env.local
 .env*.local
+users.json
+settings.json
 
 # Python
 __pycache__

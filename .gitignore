@@ -1,6 +1,12 @@
 # Environment — never commit secrets
 .env
 
+# User database — contains password hashes, never commit
+users.json
+
+# Runtime configuration written by the app
+settings.json
+
 # Python bytecode
 __pycache__/
 *.py[cod]

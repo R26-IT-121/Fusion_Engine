@@ -1,33 +1,40 @@
-# Core API framework
-fastapi==0.115.5
-uvicorn[standard]==0.32.1
+# DeepSentinel — Python dependencies
+#
+# NOTE: pyproject.toml + poetry.lock are the source of truth for reproducible
+# builds (Docker, CI, cloud). This file is kept in sync for environments that
+# only have pip available.
+#
+# Ranges, not hard pins: hard pins on numpy/scikit-learn break on Python 3.13,
+# which has no prebuilt wheels for older releases and would require a C compiler.
+#
+#   pip install -r requirements.txt
+#   poetry install                     (preferred)
 
-# Async HTTP client (for calling upstream model APIs)
-httpx==0.27.2
+# --- API framework ---
+fastapi>=0.115,<0.140
+uvicorn[standard]>=0.32,<0.50
 
-# ML / Data
-scikit-learn==1.5.2
-numpy==1.26.4
-joblib==1.4.2
+# --- Async HTTP (upstream model APIs + SendGrid REST) ---
+httpx>=0.27,<0.29
 
-# RAG - Vector store & embeddings
-chromadb==0.5.23
-sentence-transformers==3.3.1
+# --- ML / fusion meta-classifier ---
+scikit-learn>=1.5,<2.0
+numpy>=1.26,<3.0
+joblib>=1.4,<2.0
 
-# LLM - Gemini API
-google-generativeai==0.8.3
+# --- RAG: vector store + embeddings ---
+chromadb>=0.5,<2.0
+sentence-transformers>=3.3,<6.0
 
-# Email
-sendgrid==6.11.0
+# --- LLM ---
+google-generativeai>=0.8,<0.9
 
-# Authentication & Security
-pyjwt==2.8.1
-python-multipart==0.0.6
-passlib==1.7.4
-bcrypt==4.1.2
-email-validator==2.1.0
+# --- Auth & security ---
+pyjwt>=2.8,<3.0
+bcrypt>=4.1,<6.0
+email-validator>=2.1,<3.0
+python-multipart>=0.0.9,<0.1
 
-# Utilities
-python-dotenv==1.0.1
-pydantic==2.10.3
-pydantic[email]==2.10.3
+# --- Config ---
+python-dotenv>=1.0,<2.0
+pydantic>=2.10,<3.0
