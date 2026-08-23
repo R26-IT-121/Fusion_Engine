@@ -10,11 +10,12 @@ FastAPI orchestration layer. Handles:
 """
 
 import asyncio
+import json
 import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -334,165 +335,79 @@ async def analyze(request: AnalyzeRequest):
       3. direct scores  → use provided graph_score / behavioral_score / temporal_score
       4. fallback       → mock generator (all scores missing)
     """
-    transaction_id = request.transaction_id or str(uuid.uuid4())
-    mock_scenario_used = None
-    behavioral_signal = graph_signal = temporal_signal = None
+    # Drains the shared pipeline generator and returns its terminal result, so
+    # this endpoint and /analyze/stream cannot diverge.
+    from backend.pipeline import PipelineResult, Stage, Status, StageEvent, run_pipeline
 
-    # ── Step 1: Obtain sub-model scores ─────────────────────────────────────
-    if request.use_mock or (
-        request.transaction is None
-        and request.graph_score is None
-        and request.behavioral_score is None
-        and request.temporal_score is None
+    async for event in run_pipeline(
+        request,
+        meta_classifier=meta_classifier,
+        retriever=retriever,
+        forensic_reporter=forensic_reporter,
+        fetch_upstream=_fetch_from_upstream_apis,
+        classify=_classify,
     ):
-        from backend.mock_scores import generate_mock_scores, FraudScenario
+        if isinstance(event, PipelineResult):
+            return AnalyzeResponse(**event.payload)
 
-        scenario = FraudScenario.RANDOM
-        if request.mock_scenario:
-            try:
-                scenario = FraudScenario(request.mock_scenario)
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Unknown mock_scenario '{request.mock_scenario}'. "
-                        f"Valid options: {[s.value for s in FraudScenario if s.value != 'random']}"
-                    ),
-                )
-        mock = generate_mock_scores(scenario=scenario)
-        graph_score = mock.graph_score
-        behavioral_score = mock.behavioral_score
-        temporal_score = mock.temporal_score
-        mock_scenario_used = mock.scenario
-        graph_available = behavioral_available = temporal_available = True
-        logger.info(f"Using mock scores for scenario '{mock_scenario_used}'.")
+        if isinstance(event, StageEvent) and event.status == Status.ERROR:
+            # A bad scenario name is the caller's mistake; anything else is ours.
+            status = 400 if event.stage == Stage.MODELS else 500
+            if event.stage != Stage.REPORT:
+                raise HTTPException(status_code=status, detail=event.message)
 
-    elif request.transaction is not None:
-        # Call all three upstream APIs with the full transaction payload
-        logger.info(f"Calling upstream APIs for transaction {transaction_id}.")
-        b_resp, g_resp, t_resp = await _fetch_from_upstream_apis(
-            request.transaction, transaction_id
-        )
+    raise HTTPException(status_code=500, detail="Pipeline produced no result.")
 
-        behavioral_score = b_resp.score if b_resp.available else None
-        graph_score = g_resp.score if g_resp.available else None
-        temporal_score = t_resp.score if t_resp.available else None
 
-        behavioral_available = b_resp.available
-        graph_available = g_resp.available
-        temporal_available = t_resp.available
+@app.post("/analyze/stream", tags=["analysis"])
+async def analyze_stream(request: AnalyzeRequest):
+    """
+    Run the same analysis, emitting each stage as it completes.
 
-        behavioral_signal = b_resp.fraud_signal_summary
-        graph_signal = g_resp.fraud_signal_summary
-        temporal_signal = t_resp.fraud_signal_summary
+    Server-sent events. Every stage carries its measured duration, so the client
+    renders what actually happened rather than an animation timed to look busy.
 
-        if not any([behavioral_available, graph_available, temporal_available]):
-            logger.warning("All upstream APIs unavailable — falling back to mock.")
-            from backend.mock_scores import generate_mock_scores, FraudScenario
-            mock = generate_mock_scores(scenario=FraudScenario.RANDOM)
-            graph_score = mock.graph_score
-            behavioral_score = mock.behavioral_score
-            temporal_score = mock.temporal_score
-            mock_scenario_used = mock.scenario
-            graph_available = behavioral_available = temporal_available = True
+        event: stage     one per stage transition (running → done/error/skipped)
+        event: complete  the assembled result, identical to POST /analyze
+        event: error     the pipeline could not continue
+    """
+    from fastapi.responses import StreamingResponse
 
-    else:
-        # Direct score injection — useful for testing and dashboard demos
-        graph_score = request.graph_score
-        behavioral_score = request.behavioral_score
-        temporal_score = request.temporal_score
-        graph_available = graph_score is not None
-        behavioral_available = behavioral_score is not None
-        temporal_available = temporal_score is not None
+    from backend.pipeline import PipelineResult, Status, StageEvent, run_pipeline
 
-    # ── Step 2: Fuse scores via meta-classifier ──────────────────────────────
-    fusion = meta_classifier.fuse(
-        graph_score=graph_score if graph_available else None,
-        behavioral_score=behavioral_score if behavioral_available else None,
-        temporal_score=temporal_score if temporal_available else None,
-    )
+    async def emit() -> AsyncIterator[str]:
+        def sse(event: str, payload: dict) -> str:
+            # json.dumps, not str(): a stray newline inside a value would
+            # otherwise terminate the event early and corrupt the stream.
+            return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
 
-    # ── Step 3: RAG retrieval ────────────────────────────────────────────────
-    retrievals = retriever.retrieve(
-        graph_score=fusion.graph_score,
-        behavioral_score=fusion.behavioral_score,
-        temporal_score=fusion.temporal_score,
-        confidence_score=fusion.confidence_score,
-    )
-    if not retrievals:
-        raise HTTPException(status_code=500, detail="RAG retrieval returned no results.")
-    top_retrieval = retrievals[0]
-
-    # ── Step 4: LLM forensic report generation ───────────────────────────────
-    forensic_report = None
-    if forensic_reporter is not None:
-        from backend.rag.prompt_builder import build_chain_of_evidence_prompt, UpstreamContext
-
-        upstream_ctx = UpstreamContext(
-            behavioral_signal_summary=behavioral_signal,
-            graph_signal_summary=graph_signal,
-            temporal_signal_summary=temporal_signal,
-        )
-
-        prompt_package = build_chain_of_evidence_prompt(
-            transaction_id=transaction_id,
-            graph_score=fusion.graph_score,
-            behavioral_score=fusion.behavioral_score,
-            temporal_score=fusion.temporal_score,
-            confidence_score=fusion.confidence_score,
-            graph_available=fusion.graph_available,
-            behavioral_available=fusion.behavioral_available,
-            temporal_available=fusion.temporal_available,
-            retrieval=top_retrieval,
-            upstream_context=upstream_ctx,
-        )
         try:
-            forensic_report = forensic_reporter.generate_report(prompt_package)
+            async for item in run_pipeline(
+                request,
+                meta_classifier=meta_classifier,
+                retriever=retriever,
+                forensic_reporter=forensic_reporter,
+                fetch_upstream=_fetch_from_upstream_apis,
+                classify=_classify,
+            ):
+                if isinstance(item, PipelineResult):
+                    yield sse("complete", item.payload)
+                elif isinstance(item, StageEvent):
+                    yield sse("stage", item.to_dict())
         except Exception as e:
-            logger.error(f"LLM generation failed: {e}")
-            forensic_report = f"[LLM ERROR] Report generation failed: {e}"
+            logger.exception("Streaming pipeline failed")
+            yield sse("error", {"message": f"{type(e).__name__}: {e}"})
 
-    # ── Optional baseline (no RAG context) for ablation ─────────────────────
-    baseline_report = None
-    if request.include_baseline and forensic_reporter is not None:
-        from backend.rag.prompt_builder import build_baseline_prompt
-        baseline_package = build_baseline_prompt(
-            transaction_id=transaction_id,
-            graph_score=fusion.graph_score,
-            behavioral_score=fusion.behavioral_score,
-            temporal_score=fusion.temporal_score,
-            confidence_score=fusion.confidence_score,
-        )
-        try:
-            baseline_report = forensic_reporter.generate_report(baseline_package)
-        except Exception as e:
-            logger.error(f"Baseline LLM generation failed: {e}")
-            baseline_report = f"[LLM ERROR] Baseline generation failed: {e}"
-
-    return AnalyzeResponse(
-        transaction_id=transaction_id,
-        fraud_confidence_score=fusion.confidence_score,
-        classification=_classify(fusion.confidence_score),
-        graph_score=fusion.graph_score,
-        behavioral_score=fusion.behavioral_score,
-        temporal_score=fusion.temporal_score,
-        graph_available=fusion.graph_available,
-        behavioral_available=fusion.behavioral_available,
-        temporal_available=fusion.temporal_available,
-        modalities_used=fusion.modalities_used,
-        retrieval=RetrievalInfo(
-            typology_id=top_retrieval.typology_id,
-            typology_name=top_retrieval.typology_name,
-            stage=top_retrieval.stage,
-            risk_level=top_retrieval.risk_level,
-            similarity_score=top_retrieval.similarity_score,
-        ),
-        forensic_report=forensic_report,
-        baseline_report=baseline_report,
-        mock_scenario=mock_scenario_used,
-        behavioral_signal=behavioral_signal,
-        graph_signal=graph_signal,
-        temporal_signal=temporal_signal,
+    return StreamingResponse(
+        emit(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Without this, nginx buffers the whole response and every event
+            # arrives at once — which would defeat the point.
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
