@@ -73,6 +73,19 @@ def _normalise_url(raw: str) -> tuple[str, dict]:
             ctx.verify_mode = ssl.CERT_NONE
             connect_args["ssl"] = ctx
 
+        # Connection poolers (Neon's -pooler endpoint, Supabase's :6543, any
+        # PgBouncer in transaction mode) hand each transaction a different
+        # backend connection. asyncpg prepares statements and caches them by
+        # name against the connection it prepared them on, so a cached name
+        # resolves on a backend that never saw the PREPARE — surfacing as
+        # intermittent "prepared statement _asyncpg_stmt_N does not exist"
+        # under concurrency. Disabling the cache is the supported fix.
+        if "-pooler." in parts.netloc or parts.port == 6543:
+            connect_args["statement_cache_size"] = 0
+            logger.info(
+                "Pooled endpoint detected — disabled asyncpg statement cache."
+            )
+
         url = urlunsplit(
             (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
         )
