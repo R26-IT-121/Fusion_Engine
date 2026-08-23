@@ -1,11 +1,28 @@
 """
-Email service for fraud alert notifications.
-Sends beautiful HTML reports to configured risk managers via SendGrid.
-No passwords stored - only API key required.
+Fraud alert email.
+
+Sending requires an identity to send *from*. Two are supported:
+
+  SMTP      A dedicated sending account and an app password. Simplest to set up
+            and works immediately. The app password is a scoped credential
+            revocable on its own, not the account password — treat it like an
+            API key and never use a personal account.
+
+  SendGrid  An API key. Better deliverability at volume and no SMTP port to
+            worry about, but the sender address must be verified first.
+
+With neither configured, nothing is sent and the caller is told so. An earlier
+version returned success in that case, so the UI reported delivery for mail that
+was never sent.
 """
 
+import asyncio
 import logging
+import smtplib
+import ssl
 from dataclasses import dataclass
+from email.message import EmailMessage
+from enum import Enum
 from typing import List, Optional
 
 import httpx
@@ -14,10 +31,25 @@ from backend import config
 
 logger = logging.getLogger(__name__)
 
-# SendGrid is called through its REST API — an API key, never a password.
-SENDGRID_API_KEY = config.get("secrets", "sendgrid_api_key")
 SENDER_EMAIL = config.get("email", "sender_email")
 SENDER_NAME = config.get("email", "sender_name")
+
+
+class SendOutcome(str, Enum):
+    SENT = "sent"
+    NOT_CONFIGURED = "not_configured"
+    FAILED = "failed"
+
+
+@dataclass
+class SendResult:
+    outcome: SendOutcome
+    provider: Optional[str] = None
+    detail: Optional[str] = None
+
+    @property
+    def ok(self) -> bool:
+        return self.outcome is SendOutcome.SENT
 
 
 @dataclass
@@ -39,71 +71,193 @@ class FraudAlert:
     typology_id: Optional[str] = None
 
 
+def _provider() -> tuple[Optional[str], dict]:
+    """
+    Resolve which provider is configured. Read per call rather than at import so
+    editing config.ini and restarting is enough — and so a test can change it.
+    """
+    smtp_host = config.get("email", "smtp_host")
+    smtp_user = config.get("secrets", "smtp_username")
+    smtp_pass = config.get("secrets", "smtp_password")
+    if smtp_host and smtp_user and smtp_pass:
+        return "smtp", {
+            "host": smtp_host,
+            "port": config.get("email", "smtp_port"),
+            "username": smtp_user,
+            "password": smtp_pass,
+            "use_tls": config.get("email", "smtp_use_tls"),
+        }
+
+    sendgrid_key = config.get("secrets", "sendgrid_api_key")
+    if sendgrid_key:
+        return "sendgrid", {"api_key": sendgrid_key}
+
+    return None, {}
+
+
 async def send_fraud_alert(
     alert: FraudAlert,
     recipient_emails: List[str],
     backend_url: str = "http://localhost:8000",
-) -> bool:
-    """Send fraud alert email via SendGrid (no password required)."""
-
+) -> SendResult:
+    """Send a fraud alert. Reports what actually happened — never a false success."""
     if not recipient_emails:
-        logger.warning("No recipient emails configured")
-        return False
+        return SendResult(
+            SendOutcome.NOT_CONFIGURED,
+            detail="No recipients were given.",
+        )
+
+    provider, settings = _provider()
+    if provider is None:
+        logger.warning(
+            "Email not sent for %s — no provider configured.", alert.transaction_id
+        )
+        return SendResult(
+            SendOutcome.NOT_CONFIGURED,
+            detail=(
+                "No email provider is configured, so nothing was sent. Set either "
+                "SMTP credentials or a SendGrid API key in config.ini."
+            ),
+        )
 
     html_body = _build_email_html(alert, backend_url)
 
-    # Use SendGrid (production - API key only, no password)
-    if SENDGRID_API_KEY:
-        return await _send_via_sendgrid(alert, recipient_emails, html_body)
-    # Mock send if no credentials (for development/testing)
-    else:
-        logger.info(
-            f"Mock email send (SendGrid not configured): {alert.transaction_id} → {recipient_emails}"
+    if provider == "smtp":
+        # smtplib is blocking; keep it off the event loop.
+        return await asyncio.to_thread(
+            _send_via_smtp, alert, recipient_emails, html_body, settings
         )
-        return True
+    return await _send_via_sendgrid(
+        alert, recipient_emails, html_body, settings["api_key"]
+    )
+
+
+def _send_via_smtp(
+    alert: FraudAlert, recipients: List[str], html_body: str, s: dict
+) -> SendResult:
+    message = EmailMessage()
+    message["Subject"] = f"Fraud alert: {alert.classification} risk on {alert.transaction_id}"
+    message["From"] = f"{SENDER_NAME} <{s['username']}>"
+    message["To"] = ", ".join(recipients)
+    # A plain-text part matters: some clients and most spam filters penalise
+    # HTML-only mail.
+    message.set_content(_build_email_text(alert))
+    message.add_alternative(html_body, subtype="html")
+
+    try:
+        context = ssl.create_default_context()
+        if int(s["port"]) == 465:
+            with smtplib.SMTP_SSL(s["host"], int(s["port"]), context=context, timeout=20) as srv:
+                srv.login(s["username"], s["password"])
+                srv.send_message(message)
+        else:
+            with smtplib.SMTP(s["host"], int(s["port"]), timeout=20) as srv:
+                if s["use_tls"]:
+                    srv.starttls(context=context)
+                srv.login(s["username"], s["password"])
+                srv.send_message(message)
+
+        logger.info(f"Alert sent via SMTP: {alert.transaction_id} → {recipients}")
+        return SendResult(SendOutcome.SENT, provider="smtp")
+
+    except smtplib.SMTPAuthenticationError:
+        return SendResult(
+            SendOutcome.FAILED,
+            provider="smtp",
+            detail=(
+                "The mail server rejected those credentials. For Gmail this "
+                "usually means a normal account password was used instead of an "
+                "app password, or two-factor authentication is not enabled on "
+                "the sending account."
+            ),
+        )
+    except (smtplib.SMTPException, OSError) as e:
+        return SendResult(
+            SendOutcome.FAILED,
+            provider="smtp",
+            detail=f"{type(e).__name__}: {e}",
+        )
 
 
 async def _send_via_sendgrid(
-    alert: FraudAlert, recipient_emails: List[str], html_body: str
-) -> bool:
-    """Send via SendGrid API."""
-    try:
-        payload = {
-            "personalizations": [
-                {"to": [{"email": email} for email in recipient_emails]}
-            ],
-            "from": {"email": SENDER_EMAIL, "name": SENDER_NAME},
-            "subject": f"🚨 Fraud Alert: Transaction {alert.transaction_id}",
-            "content": [{"type": "text/html", "value": html_body}],
-        }
+    alert: FraudAlert, recipients: List[str], html_body: str, api_key: str
+) -> SendResult:
+    payload = {
+        "personalizations": [{"to": [{"email": e} for e in recipients]}],
+        "from": {"email": SENDER_EMAIL, "name": SENDER_NAME},
+        "subject": f"Fraud alert: {alert.classification} risk on {alert.transaction_id}",
+        "content": [
+            {"type": "text/plain", "value": _build_email_text(alert)},
+            {"type": "text/html", "value": html_body},
+        ],
+    }
 
+    try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 "https://api.sendgrid.com/v3/mail/send",
                 json=payload,
-                headers={"Authorization": f"Bearer {SENDGRID_API_KEY}"},
-                timeout=10.0,
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=15.0,
             )
 
-            if resp.status_code in (200, 202):
-                logger.info(f"Email sent: {alert.transaction_id} → {recipient_emails}")
-                return True
-            else:
-                logger.error(f"SendGrid error {resp.status_code}: {resp.text}")
-                return False
+        if resp.status_code in (200, 202):
+            logger.info(f"Alert sent via SendGrid: {alert.transaction_id} → {recipients}")
+            return SendResult(SendOutcome.SENT, provider="sendgrid")
+
+        # 403 here is nearly always an unverified sender, which the generic
+        # message does not make obvious.
+        detail = f"SendGrid returned {resp.status_code}: {resp.text[:300]}"
+        if resp.status_code == 403:
+            detail += (
+                f" — most often this means '{SENDER_EMAIL}' has not been verified "
+                f"as a sender in the SendGrid account."
+            )
+        logger.error(detail)
+        return SendResult(SendOutcome.FAILED, provider="sendgrid", detail=detail)
 
     except Exception as e:
-        logger.error(f"Email send failed: {type(e).__name__}: {e}")
-        return False
+        logger.error(f"SendGrid request failed: {type(e).__name__}: {e}")
+        return SendResult(
+            SendOutcome.FAILED, provider="sendgrid", detail=f"{type(e).__name__}: {e}"
+        )
+
+
+def _build_email_text(alert: FraudAlert) -> str:
+    """Plain-text alternative. HTML-only mail is penalised by spam filters."""
+    lines = [
+        f"{alert.classification} RISK — fraud confidence {alert.fraud_confidence:.0%}",
+        "",
+        f"Transaction: {alert.transaction_id}",
+        f"Detected:    {alert.timestamp}",
+        "",
+        "Model scores",
+    ]
+    for label, score, signal in (
+        ("Network (GraphSAGE)", alert.graph_score, alert.graph_signal),
+        ("Behaviour (VAE)", alert.behavioral_score, alert.behavioral_signal),
+        ("Timing (TCN)", alert.temporal_score, alert.temporal_signal),
+    ):
+        if score is None:
+            continue
+        lines.append(f"  {label}: {score:.3f}")
+        if signal:
+            lines.append(f"    {signal}")
+
+    if alert.typology_name:
+        lines += ["", f"FATF typology: {alert.typology_name} ({alert.typology_id})"]
+    if alert.forensic_report:
+        lines += ["", "Forensic analysis", alert.forensic_report]
+
+    lines += ["", "— DeepSentinel"]
+    return "\n".join(lines)
 
 
 def build_email_html(alert: FraudAlert, backend_url: str) -> str:
-    """Build beautiful HTML email (public API)."""
     return _build_email_html_impl(alert, backend_url)
 
 
 def _build_email_html(alert: FraudAlert, backend_url: str) -> str:
-    """Deprecated: use build_email_html instead."""
     return _build_email_html_impl(alert, backend_url)
 
 

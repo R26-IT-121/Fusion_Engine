@@ -19,7 +19,7 @@ from typing import AsyncIterator, Optional
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
@@ -411,6 +411,260 @@ async def analyze_stream(request: AnalyzeRequest):
     )
 
 
+@app.post("/analyze/batch", tags=["analysis"])
+async def analyze_batch(
+    file: UploadFile = File(...),
+    alert_threshold: float = Form(0.6),
+    narrate_top: int = Form(3),
+    user: User = Depends(get_current_user),
+):
+    """
+    Score a whole file of transactions, streaming progress as it goes.
+
+    Accepts CSV or Excel in the PaySim schema. An isFraud column, if present, is
+    treated as ground truth and reported back as precision and recall — it never
+    reaches the models.
+
+    Narration is generated only for the `narrate_top` highest-scoring rows.
+    Producing one per transaction would take seconds each and turn a 300-row
+    file into an hour-long job.
+
+        event: meta      row count and whether labels were found
+        event: progress  one per transaction, with its score
+        event: summary   totals, and detection metrics when labels were present
+        event: error     the file could not be processed
+    """
+    import time
+
+    from fastapi.responses import StreamingResponse
+
+    from backend.adapters.upstream import UpstreamResponse
+    from backend.batch import (
+        BatchError,
+        BatchSummary,
+        UpstreamCircuit,
+        parse_file,
+        update_summary,
+    )
+
+    raw = await file.read()
+
+    async def emit() -> AsyncIterator[str]:
+        def sse(event: str, payload: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+        try:
+            rows = parse_file(file.filename or "upload.csv", raw)
+        except BatchError as e:
+            yield sse("error", {"message": str(e)})
+            return
+        except Exception as e:
+            logger.exception("Batch parse failed")
+            yield sse("error", {"message": f"The file could not be read: {type(e).__name__}"})
+            return
+
+        labelled = sum(1 for r in rows if r.is_fraud_label is not None)
+        yield sse(
+            "meta",
+            {
+                "filename": file.filename,
+                "rows": len(rows),
+                "labelled": labelled,
+                "has_labels": labelled > 0,
+                "alert_threshold": alert_threshold,
+            },
+        )
+
+        summary = BatchSummary(total=len(rows))
+        summary.has_labels = labelled > 0
+        scored: list[dict] = []
+        started = time.perf_counter()
+
+        # Stops re-dialling a model that has proved unreachable; see UpstreamCircuit.
+        circuit = UpstreamCircuit()
+        unavailable = UpstreamResponse(score=0.5, available=False)
+        announced: set[str] = set()
+
+        for row in rows:
+            try:
+                tx = TransactionData(**row.transaction)
+            except Exception as e:
+                summary.skipped += 1
+                yield sse(
+                    "progress",
+                    {
+                        "index": row.index,
+                        "skipped": True,
+                        "message": f"Row {row.index} rejected: {e.__class__.__name__}",
+                    },
+                )
+                continue
+
+            # Scores and fusion only — no narration per row.
+            if circuit.skipped and len(circuit.skipped) == 3:
+                # Every model is down; no point dialling at all.
+                b = g = t = unavailable
+            else:
+                b, g, t = await _fetch_from_upstream_apis(tx, f"BATCH_{row.index}")
+
+            for name, resp in (("behavioral", b), ("graph", g), ("temporal", t)):
+                circuit.record(name, resp.available)
+
+            # Tell the client the first time a model is written off, so a long
+            # run does not look healthy when two thirds of it is imputed.
+            for name in circuit.skipped:
+                if name not in announced:
+                    announced.add(name)
+                    yield sse(
+                        "upstream",
+                        {
+                            "modality": name,
+                            "message": (
+                                f"The {name} model API did not respond and has been "
+                                f"skipped for the rest of this file. Its score is "
+                                f"imputed and confidence penalised."
+                            ),
+                        },
+                    )
+
+            if circuit.is_open("behavioral"):
+                b = unavailable
+            if circuit.is_open("graph"):
+                g = unavailable
+            if circuit.is_open("temporal"):
+                t = unavailable
+
+            fusion = await asyncio.to_thread(
+                meta_classifier.fuse,
+                graph_score=g.score if g.available else None,
+                behavioral_score=b.score if b.available else None,
+                temporal_score=t.score if t.available else None,
+            )
+
+            classification = _classify(fusion.confidence_score)
+
+            # With no model reachable every score is imputed to the same neutral
+            # value, which fuses to a figure above any sane threshold — so the
+            # system would alert on every row, including the legitimate ones.
+            # An alert carrying no evidence is worse than no alert: it trains
+            # the reviewer to ignore them. Rows scored with zero modalities are
+            # reported as unscored and excluded from the metrics.
+            scored_at_all = fusion.modalities_used > 0
+            alerted = scored_at_all and fusion.confidence_score >= alert_threshold
+
+            if scored_at_all:
+                update_summary(summary, classification, alerted, row.is_fraud_label)
+            else:
+                summary.analysed += 1
+                summary.unscored += 1
+
+            record = {
+                "index": row.index,
+                "nameOrig": tx.nameOrig,
+                "nameDest": tx.nameDest,
+                "type": tx.type,
+                "amount": tx.amount,
+                "score": fusion.confidence_score,
+                "classification": classification,
+                "alerted": alerted,
+                "unscored": not scored_at_all,
+                "label": row.is_fraud_label,
+                "typology_label": row.typology_label,
+                "graph_score": fusion.graph_score,
+                "behavioral_score": fusion.behavioral_score,
+                "temporal_score": fusion.temporal_score,
+                "modalities_used": fusion.modalities_used,
+            }
+            scored.append(record)
+            yield sse("progress", record)
+
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+        # Narrate only the highest-risk rows.
+        narratives = []
+        top = sorted(scored, key=lambda r: r["score"], reverse=True)[: max(0, narrate_top)]
+        for record in top:
+            if not record["alerted"] or forensic_reporter is None:
+                continue
+            try:
+                retrievals = await asyncio.to_thread(
+                    retriever.retrieve,
+                    graph_score=record["graph_score"],
+                    behavioral_score=record["behavioral_score"],
+                    temporal_score=record["temporal_score"],
+                    confidence_score=record["score"],
+                )
+                if not retrievals:
+                    continue
+                from backend.rag.prompt_builder import (
+                    UpstreamContext,
+                    build_chain_of_evidence_prompt,
+                )
+
+                report = await asyncio.to_thread(
+                    forensic_reporter.generate_report,
+                    build_chain_of_evidence_prompt(
+                        transaction_id=f"ROW_{record['index']}",
+                        graph_score=record["graph_score"],
+                        behavioral_score=record["behavioral_score"],
+                        temporal_score=record["temporal_score"],
+                        confidence_score=record["score"],
+                        graph_available=record["graph_score"] is not None,
+                        behavioral_available=record["behavioral_score"] is not None,
+                        temporal_available=record["temporal_score"] is not None,
+                        retrieval=retrievals[0],
+                        upstream_context=UpstreamContext(),
+                    ),
+                )
+                narratives.append(
+                    {
+                        "index": record["index"],
+                        "score": record["score"],
+                        "typology": retrievals[0].typology_name,
+                        "report": report,
+                    }
+                )
+                yield sse("narrative", narratives[-1])
+            except Exception as e:
+                logger.error(f"Batch narration failed for row {record['index']}: {e}")
+
+        yield sse(
+            "summary",
+            {
+                "total": summary.total,
+                "analysed": summary.analysed,
+                "skipped": summary.skipped,
+                "unscored": summary.unscored,
+                "alerts": summary.alerts,
+                "by_classification": summary.by_classification,
+                "has_labels": summary.has_labels,
+                "metrics": summary.metrics(),
+                "elapsed_ms": elapsed_ms,
+                "narratives": len(narratives),
+                "skipped_upstreams": circuit.skipped,
+            },
+        )
+
+        from backend.auth import audit
+
+        await audit(
+            "analysis.batch",
+            actor=user.username,
+            target=file.filename,
+            detail=f"rows={summary.analysed} alerts={summary.alerts}",
+        )
+
+    return StreamingResponse(
+        emit(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/retrain")
 async def retrain_classifier():
     """Force retrain the meta-classifier (use after upstream models are recalibrated)."""
@@ -583,21 +837,57 @@ async def send_test_email(
         typology_id="TY_001_MULE",
     )
 
+    from backend.email_service import SendOutcome
     from backend.settings import get_backend_url
 
-    success = await send_fraud_alert(
+    result = await send_fraud_alert(
         test_alert, [req.email], backend_url=await get_backend_url()
     )
-    if not success:
-        raise HTTPException(
-            status_code=502,
-            detail="Email provider rejected the send. Check the SendGrid API key "
-                   "and that the sender address is verified.",
-        )
+
+    if result.outcome is SendOutcome.NOT_CONFIGURED:
+        # 409, not 500: nothing is broken, the server is simply not set up to
+        # send. Reporting success here is what previously made a non-delivery
+        # look like a delivery.
+        raise HTTPException(status_code=409, detail=result.detail)
+
+    if result.outcome is SendOutcome.FAILED:
+        raise HTTPException(status_code=502, detail=result.detail)
+
     return {
         "status": "sent",
         "recipient": req.email,
-        "note": "Check the spam folder if it does not arrive.",
+        "provider": result.provider,
+        "note": "Check the spam folder if it does not arrive within a minute.",
+    }
+
+
+@app.get("/email/status", tags=["email"])
+async def email_status(user: User = Depends(require_manager)):
+    """Report whether outgoing email is configured, and how."""
+    from backend.email_service import _provider
+
+    provider, settings = _provider()
+    if provider == "smtp":
+        return {
+            "configured": True,
+            "provider": "smtp",
+            "sending_as": settings["username"],
+            "host": f"{settings['host']}:{settings['port']}",
+        }
+    if provider == "sendgrid":
+        return {
+            "configured": True,
+            "provider": "sendgrid",
+            "sending_as": config.get("email", "sender_email"),
+            "note": "The sender address must be verified in SendGrid or sends return 403.",
+        }
+    return {
+        "configured": False,
+        "provider": None,
+        "detail": (
+            "No provider configured — alerts will not be delivered. Set SMTP "
+            "credentials or a SendGrid API key in config.ini."
+        ),
     }
 
 

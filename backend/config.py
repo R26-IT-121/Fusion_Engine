@@ -105,6 +105,12 @@ SETTINGS: tuple[Setting, ...] = (
     # --- email ---
     Setting("email", "sender_email", "SENDER_EMAIL", "alerts@deepsentinel.io"),
     Setting("email", "sender_name", "SENDER_NAME", "DeepSentinel Fraud Alerts"),
+    Setting("email", "smtp_host", "SMTP_HOST", "",
+            description="e.g. smtp.gmail.com. Leave blank to use SendGrid instead"),
+    Setting("email", "smtp_port", "SMTP_PORT", 587, cast=int,
+            description="587 for STARTTLS, 465 for implicit TLS"),
+    Setting("email", "smtp_use_tls", "SMTP_USE_TLS", True, cast=_as_bool,
+            description="STARTTLS on port 587; ignored on 465"),
 
     # --- secrets (environment first; never committed) ---
     Setting("secrets", "jwt_secret_key", "JWT_SECRET_KEY", "", secret=True,
@@ -117,6 +123,10 @@ SETTINGS: tuple[Setting, ...] = (
             description="Google AI Studio API key"),
     Setting("secrets", "sendgrid_api_key", "SENDGRID_API_KEY", "", secret=True,
             description="SendGrid API key for fraud alert email"),
+    Setting("secrets", "smtp_username", "SMTP_USERNAME", "", secret=True,
+            description="Sending account address, e.g. alerts@yourdomain.com"),
+    Setting("secrets", "smtp_password", "SMTP_PASSWORD", "", secret=True,
+            description="App password for the sending account, never a personal password"),
 )
 
 _INDEX: dict[tuple[str, str], Setting] = {(s.section, s.key): s for s in SETTINGS}
