@@ -89,6 +89,7 @@ async def run_pipeline(
     transaction_id = request.transaction_id or str(uuid.uuid4())
     mock_scenario_used = None
     behavioral_signal = graph_signal = temporal_signal = None
+    fell_back = False  # simulated because upstream was unreachable, not by choice
 
     # ── Stage 1: input ───────────────────────────────────────────────────────
     yield StageEvent(Stage.INPUT, Status.RUNNING)
@@ -187,6 +188,10 @@ async def run_pipeline(
                 temporal_score = mock.temporal_score
                 mock_scenario_used = mock.scenario
                 graph_available = behavioral_available = temporal_available = True
+                # Distinguish this from a scenario the user deliberately chose.
+                # Presenting simulated scores as model output would misrepresent
+                # the system to anyone evaluating it.
+                fell_back = True
 
         else:
             graph_score = request.graph_score
@@ -227,11 +232,14 @@ async def run_pipeline(
                 "modality": "Timing",
             },
             "mock_scenario": mock_scenario_used,
+            "fell_back": fell_back,
         },
         message=(
-            f"{reachable} of 3 models contributed"
-            if not mock_scenario_used
+            "No model API responded — scores below are simulated, not model output"
+            if fell_back
             else f"Simulated scenario: {mock_scenario_used}"
+            if mock_scenario_used
+            else f"{reachable} of 3 models contributed"
         ),
     )
 

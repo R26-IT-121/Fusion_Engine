@@ -1,12 +1,48 @@
-"""End-to-end test of DB-backed auth and role enforcement."""
+"""
+End-to-end test of DB-backed auth and role enforcement.
 
+Runs against a disposable SQLite file, never the configured database. An
+earlier version inherited config.ini and wrote its fixtures straight into the
+shared Neon instance — tests must not touch production data, and a suite that
+depends on an empty database is not repeatable either way.
+
+Override with TEST_DATABASE_URL to exercise a real PostgreSQL instance; point
+it at a scratch database, not the live one.
+"""
+
+import os
+import pathlib
 import sys
 
-sys.path.insert(0, r"C:\Projects\DeepSentinel")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from fastapi.testclient import TestClient
+# Must be set before backend.config resolves anything, since values are cached
+# on first read.
+_TEST_DB = pathlib.Path(__file__).parent / "_test.db"
+_TEST_DB.unlink(missing_ok=True)
+os.environ.setdefault(
+    "TEST_DATABASE_URL", f"sqlite+aiosqlite:///{_TEST_DB.as_posix()}"
+)
+os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
+os.environ["JWT_SECRET_KEY"] = "test-only-key-not-used-anywhere-else"
+os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = "admin123"
 
-from backend.main import app
+from fastapi.testclient import TestClient  # noqa: E402
+
+from backend import config  # noqa: E402
+
+config.reload()
+
+resolved = config.get("database", "url")
+if "_test.db" not in resolved and os.environ.get("TEST_DATABASE_URL") == resolved:
+    pass  # explicit override, caller's responsibility
+elif "_test.db" not in resolved:
+    raise SystemExit(
+        f"Refusing to run: tests resolved to {resolved!r}, not the disposable "
+        f"test database. Check that DATABASE_URL is being honoured."
+    )
+
+from backend.main import app  # noqa: E402
 
 FAILURES = []
 
