@@ -49,7 +49,12 @@ class GeminiBackend:
                 # Near-deterministic: a forensic report should not vary run to
                 # run, and the ablation measurement depends on that stability.
                 temperature=0.1,
-                max_output_tokens=2048,
+                # Gemini 2.5+ spends tokens on internal reasoning before it
+                # emits any output, and that reasoning counts against this
+                # ceiling. A five-section report plus thinking overruns 2048,
+                # and an overrun returns an EMPTY body rather than a truncated
+                # one — so the symptom is a blank report, not a short one.
+                max_output_tokens=8192,
             ),
         )
 
@@ -61,9 +66,14 @@ class GeminiBackend:
             reason = getattr(
                 getattr(response, "candidates", [None])[0], "finish_reason", None
             )
+            hint = (
+                "the token ceiling was consumed by internal reasoning before "
+                "any output was produced — raise max_output_tokens"
+                if str(reason).endswith("MAX_TOKENS")
+                else "usually a safety block"
+            )
             raise RuntimeError(
-                f"Gemini returned no text (finish_reason={reason}). "
-                f"Usually a safety block or the output limit being reached."
+                f"Gemini returned no text (finish_reason={reason}): {hint}."
             )
         return text
 

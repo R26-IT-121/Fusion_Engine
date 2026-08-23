@@ -378,7 +378,16 @@ async def _generate_with_retry(reporter, prompt, attempts: int = 3):
         except Exception as e:
             last = e
             text = str(e)
-            if "429" not in text and "ResourceExhausted" not in type(e).__name__:
+            # 429 is throttling; 503 is Google reporting transient overload.
+            # Both resolve on their own, so both are worth waiting out. Anything
+            # else is a real fault and should surface immediately.
+            transient = (
+                "429" in text
+                or "503" in text
+                or "UNAVAILABLE" in text
+                or "ResourceExhausted" in type(e).__name__
+            )
+            if not transient:
                 raise
 
             if "per_day" in text or "free_tier_requests" in text:

@@ -121,6 +121,10 @@ SETTINGS: tuple[Setting, ...] = (
             description="Password for the admin account created on first run"),
     Setting("secrets", "gemini_api_key", "GEMINI_API_KEY", "", secret=True,
             description="Google AI Studio API key"),
+    Setting("secrets", "chatbot_gemini_api_key", "CHATBOT_GEMINI_API_KEY", "", secret=True,
+            description="Separate key for the chatbots, so their traffic does not "
+                        "consume the quota the forensic reports need. Falls back "
+                        "to gemini_api_key when unset"),
     Setting("secrets", "sendgrid_api_key", "SENDGRID_API_KEY", "", secret=True,
             description="SendGrid API key for fraud alert email"),
     Setting("secrets", "smtp_username", "SMTP_USERNAME", "", secret=True,
