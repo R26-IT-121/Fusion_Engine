@@ -348,6 +348,12 @@ async def analyze(request: AnalyzeRequest):
         classify=_classify,
     ):
         if isinstance(event, PipelineResult):
+            from backend.settings import record_analysis
+
+            await record_analysis(
+                event.payload,
+                transaction=request.transaction.model_dump() if request.transaction else None,
+            )
             return AnalyzeResponse(**event.payload)
 
         if isinstance(event, StageEvent) and event.status == Status.ERROR:
@@ -391,6 +397,14 @@ async def analyze_stream(request: AnalyzeRequest):
                 classify=_classify,
             ):
                 if isinstance(item, PipelineResult):
+                    from backend.settings import record_analysis
+
+                    await record_analysis(
+                        item.payload,
+                        transaction=(
+                            request.transaction.model_dump() if request.transaction else None
+                        ),
+                    )
                     yield sse("complete", item.payload)
                 elif isinstance(item, StageEvent):
                     yield sse("stage", item.to_dict())
@@ -989,6 +1003,49 @@ async def delete_user_endpoint(username: str, user: User = Depends(require_admin
 
     await delete_user(username, actor=user.username)
     return {"status": "deleted", "username": username}
+
+
+@app.get("/analyses", tags=["analysis"])
+async def list_analyses(
+    limit: int = 50,
+    classification: Optional[str] = None,
+    user: User = Depends(get_current_user),
+):
+    """Recent analyses, newest first. Optionally filtered by classification."""
+    from backend.db.models import as_utc
+    from backend.settings import list_recent_analyses
+
+    records = await list_recent_analyses(limit=limit, classification=classification)
+    return [
+        {
+            "transaction_id": r.transaction_id,
+            "created_at": as_utc(r.created_at),
+            "fraud_confidence_score": r.fraud_confidence_score,
+            "classification": r.classification,
+            "modalities_used": r.modalities_used,
+            "graph_score": r.graph_score,
+            "behavioral_score": r.behavioral_score,
+            "temporal_score": r.temporal_score,
+            "typology_name": r.typology_name,
+            "typology_id": r.typology_id,
+            "similarity_score": r.similarity_score,
+            "type": r.tx_type,
+            "amount": r.amount,
+            "nameOrig": r.name_orig,
+            "nameDest": r.name_dest,
+            "alert_sent": r.alert_sent,
+            "mock_scenario": r.mock_scenario,
+        }
+        for r in records
+    ]
+
+
+@app.get("/analyses/statistics", tags=["analysis"])
+async def get_analysis_statistics(user: User = Depends(get_current_user)):
+    """Aggregate counts across everything analysed so far."""
+    from backend.settings import analysis_statistics
+
+    return await analysis_statistics()
 
 
 @app.get("/audit-log", tags=["users"])

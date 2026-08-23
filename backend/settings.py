@@ -158,3 +158,102 @@ async def should_alert(classification: str) -> bool:
 async def get_backend_url() -> str:
     settings = await get_alert_settings()
     return settings.backend_url
+
+
+# ── Analysis history ─────────────────────────────────────────────────────────
+
+
+async def record_analysis(
+    payload: dict,
+    transaction: Optional[dict] = None,
+    analysed_by: Optional[str] = None,
+    alert_sent: bool = False,
+) -> None:
+    """
+    Persist one analysis so the run survives the request that produced it.
+
+    Never raises: a history write failing must not fail the analysis the user
+    asked for. A failure is logged and the caller proceeds.
+
+    Account identifiers are stored because an investigation needs them.
+    Balances are not — they add nothing after scoring and only widen what a
+    breach would expose.
+    """
+    from backend.db.models import AnalysisRecord
+    from backend.db.session import get_session
+
+    try:
+        retrieval = payload.get("retrieval") or {}
+        async with get_session() as db:
+            db.add(
+                AnalysisRecord(
+                    transaction_id=payload.get("transaction_id", "unknown"),
+                    tx_type=(transaction or {}).get("type"),
+                    amount=(transaction or {}).get("amount"),
+                    name_orig=(transaction or {}).get("nameOrig"),
+                    name_dest=(transaction or {}).get("nameDest"),
+                    step=(transaction or {}).get("step"),
+                    fraud_confidence_score=payload.get("fraud_confidence_score", 0.0),
+                    classification=payload.get("classification", "UNKNOWN"),
+                    modalities_used=payload.get("modalities_used", 0),
+                    graph_score=payload.get("graph_score"),
+                    behavioral_score=payload.get("behavioral_score"),
+                    temporal_score=payload.get("temporal_score"),
+                    graph_available=bool(payload.get("graph_available")),
+                    behavioral_available=bool(payload.get("behavioral_available")),
+                    temporal_available=bool(payload.get("temporal_available")),
+                    typology_id=retrieval.get("typology_id"),
+                    typology_name=retrieval.get("typology_name"),
+                    similarity_score=retrieval.get("similarity_score"),
+                    forensic_report=payload.get("forensic_report"),
+                    alert_sent=alert_sent,
+                    mock_scenario=payload.get("mock_scenario"),
+                    analysed_by=analysed_by,
+                )
+            )
+    except Exception as e:
+        logger.error(f"Could not record analysis: {type(e).__name__}: {e}")
+
+
+async def list_recent_analyses(limit: int = 50, classification: Optional[str] = None):
+    """Most recent analyses, newest first."""
+    from backend.db.models import AnalysisRecord
+    from backend.db.session import get_session
+
+    limit = max(1, min(limit, 500))
+    async with get_session() as db:
+        query = select(AnalysisRecord).order_by(AnalysisRecord.created_at.desc())
+        if classification:
+            query = query.where(AnalysisRecord.classification == classification.upper())
+        result = await db.scalars(query.limit(limit))
+        return list(result)
+
+
+async def analysis_statistics() -> dict:
+    """Counts for the dashboard: volume, alerts, and the classification split."""
+    from backend.db.models import AnalysisRecord
+    from backend.db.session import get_session
+
+    async with get_session() as db:
+        total = await db.scalar(select(func.count()).select_from(AnalysisRecord)) or 0
+
+        rows = await db.execute(
+            select(AnalysisRecord.classification, func.count())
+            .group_by(AnalysisRecord.classification)
+        )
+        by_classification = {c: n for c, n in rows.all()}
+
+        alerts = await db.scalar(
+            select(func.count())
+            .select_from(AnalysisRecord)
+            .where(AnalysisRecord.alert_sent.is_(True))
+        ) or 0
+
+        mean_score = await db.scalar(select(func.avg(AnalysisRecord.fraud_confidence_score)))
+
+    return {
+        "total": total,
+        "by_classification": by_classification,
+        "alerts_sent": alerts,
+        "mean_confidence": float(mean_score) if mean_score is not None else None,
+    }

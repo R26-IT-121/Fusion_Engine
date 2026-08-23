@@ -19,30 +19,53 @@ class LLMBackend(Protocol):
 
 
 class GeminiBackend:
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
-        import google.generativeai as genai
+    """
+    Gemini via the google-genai SDK.
 
-        genai.configure(api_key=api_key)
-        self._model = genai.GenerativeModel(
-            model_name=model,
-            system_instruction=None,  # injected per-call via contents
-        )
+    Replaces google-generativeai, which Google has discontinued — it warned on
+    every import and no longer receives fixes.
+
+    The system prompt is passed as a real system_instruction rather than
+    concatenated into the user turn. That matters here: the Chain of Evidence
+    constraints are the mechanism this project is testing, and instructions
+    carry more weight in that channel than buried at the top of user content.
+    """
+
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
+        from google import genai
+
+        self._client = genai.Client(api_key=api_key)
         self._model_name = model
-        logger.info(f"Gemini backend initialized: {model}")
+        logger.info(f"Gemini backend initialised: {model}")
 
     def generate(self, package: ForensicPromptPackage) -> str:
-        import google.generativeai as genai
+        from google.genai import types
 
-        # Combine system + user into a single structured request
-        full_prompt = f"{package.system_prompt}\n\n{package.user_prompt}"
-        response = self._model.generate_content(
-            full_prompt,
-            generation_config=genai.GenerationConfig(
-                temperature=0.1,       # low temp = deterministic, grounded output
+        response = self._client.models.generate_content(
+            model=self._model_name,
+            contents=package.user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=package.system_prompt,
+                # Near-deterministic: a forensic report should not vary run to
+                # run, and the ablation measurement depends on that stability.
+                temperature=0.1,
                 max_output_tokens=2048,
             ),
         )
-        return response.text
+
+        text = response.text
+        if not text:
+            # An empty body usually means a safety block or a token ceiling hit
+            # mid-generation. Silently returning "" would look like a model that
+            # had nothing to say.
+            reason = getattr(
+                getattr(response, "candidates", [None])[0], "finish_reason", None
+            )
+            raise RuntimeError(
+                f"Gemini returned no text (finish_reason={reason}). "
+                f"Usually a safety block or the output limit being reached."
+            )
+        return text
 
 
 class OllamaBackend:

@@ -27,7 +27,8 @@ chromadb>=0.5,<2.0
 sentence-transformers>=3.3,<6.0
 
 # --- LLM ---
-google-generativeai>=0.8,<0.9
+# google-genai, not google-generativeai: the latter is discontinued upstream.
+google-genai>=1.0,<2.0
 
 # --- Auth & security ---
 pyjwt>=2.8,<3.0
