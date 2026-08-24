@@ -462,3 +462,44 @@ def _build_email_html_impl(alert: FraudAlert, backend_url: str) -> str:
     </body>
     </html>
     """
+
+
+def _send_plain(
+    subject: str, body: str, recipients: list[str], reply_to: str | None = None
+) -> bool:
+    """Send a plain-text message through whichever provider is configured.
+
+    Separate from send_fraud_alert because that one builds an alert-shaped
+    HTML template; this is for operational mail such as enquiries, where the
+    text IS the content and a Reply-To matters more than styling.
+    """
+    provider, s_cfg = _provider()
+    if provider != "smtp" or not recipients:
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = f"{SENDER_NAME} <{s_cfg['username']}>"
+    message["To"] = ", ".join(recipients)
+    if reply_to:
+        message["Reply-To"] = reply_to
+    message.set_content(body)
+
+    try:
+        context = ssl.create_default_context()
+        if int(s_cfg["port"]) == 465:
+            with smtplib.SMTP_SSL(
+                s_cfg["host"], int(s_cfg["port"]), context=context, timeout=20
+            ) as srv:
+                srv.login(s_cfg["username"], s_cfg["password"])
+                srv.send_message(message)
+        else:
+            with smtplib.SMTP(s_cfg["host"], int(s_cfg["port"]), timeout=20) as srv:
+                if s_cfg.get("use_tls"):
+                    srv.starttls(context=context)
+                srv.login(s_cfg["username"], s_cfg["password"])
+                srv.send_message(message)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Plain email send failed: {exc}")
+        return False
