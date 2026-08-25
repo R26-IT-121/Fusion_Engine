@@ -184,40 +184,58 @@ async def call_temporal_api(
     timeout: float,
 ) -> UpstreamResponse:
     """
-    POST /api/v1/classify
-    Response key: temporal_risk_score
-    Transaction ID: transaction_ref.composite_id = "{nameOrig}_{step}"
-    Key fields: step_burstiness (Goh-Barabasi B coefficient), triggering_predecessor
+    POST /api/v1/classify — per TS-TCN/docs/api_contract.md (locked).
+
+    Request:  {"transaction": {9 PaySim fields}}  — nested, not flat.
+    Response: fraud_probability, fraud_label, threshold_used, attribution{...}
+
+    The service keeps its own deque(maxlen=32) of recent transactions and
+    rebuilds the window itself, so only the current transaction is sent. Until
+    32 have arrived it answers 503 WARMING_UP, which is a normal startup state
+    rather than an outage — it is reported as unavailable, not logged as a
+    failure.
     """
+    # Their schema validates these nine fields and this type pattern; sending
+    # our extra keys (transaction_id, isFlaggedFraud, _is_fraud) risks a 422.
+    FIELDS = (
+        "step", "type", "amount", "nameOrig", "oldbalanceOrg",
+        "newbalanceOrig", "nameDest", "oldbalanceDest", "newbalanceDest",
+    )
     try:
-        name_orig = transaction.get("nameOrig", "")
-        step = transaction.get("step", 0)
-        payload = {**transaction, "composite_id": f"{name_orig}_{step}"}
+        payload = {"transaction": {k: transaction[k] for k in FIELDS if k in transaction}}
 
         resp = await client.post(
             f"{base_url}/api/v1/classify",
             json=payload,
             timeout=timeout,
         )
+
+        # Warming up: the model is fine, it just has no window yet.
+        if resp.status_code == 503:
+            logger.info("Temporal API: warming up (buffer below 32 transactions)")
+            return UpstreamResponse(score=0.5, available=False)
+
         resp.raise_for_status()
         data = resp.json()
 
-        score = _clamp(float(data.get("temporal_risk_score", 0.5)))
+        # `temporal_risk_score` is the older name this adapter was written
+        # against; kept as a fallback so either shape works.
+        raw = data.get("fraud_probability", data.get("temporal_risk_score", 0.5))
+        score = _clamp(float(raw))
 
-        evidence = data.get("evidence", {})
-        current_tx = evidence.get("current_transaction", {})
-        fraud_signal_summary = current_tx.get("fraud_signal_summary")
+        attribution = data.get("attribution") or {}
+        peak_weight = attribution.get("peak_weight")
+        peak_id = attribution.get("peak_transaction_id")
+        peak_position = attribution.get("peak_position")
 
-        step_burstiness = data.get("step_burstiness")
-        predecessor = data.get("triggering_predecessor", {})
-        attention_weight = predecessor.get("attention_weight")
-        predecessor_signal = predecessor.get("predecessor_signal")
-
-        # Build summary if not provided by API
-        if not fraud_signal_summary and step_burstiness is not None:
-            parts = [f"Step burstiness coefficient: {step_burstiness:.4f}."]
-            if predecessor_signal:
-                parts.append(f"Triggering predecessor: {predecessor_signal}.")
+        fraud_signal_summary = None
+        if peak_weight is not None:
+            parts = [
+                f"Temporal attention peaked at {peak_weight:.1%} on position "
+                f"{peak_position} of the 32-transaction window."
+            ]
+            if peak_id:
+                parts.append(f"Most influential predecessor: {peak_id}.")
             fraud_signal_summary = " ".join(parts)
 
         return UpstreamResponse(
@@ -226,11 +244,12 @@ async def call_temporal_api(
             fraud_signal_summary=fraud_signal_summary,
             typology_hint=None,
             extra={
-                "step_burstiness": step_burstiness,
-                "triggering_predecessor": predecessor,
-                "attention_weight": attention_weight,
-                "flagging_miss_rate": data.get("flagging_miss_rate"),
-                "detection_method": data.get("detection_method"),
+                "composite_id": data.get("composite_id"),
+                "fraud_label": data.get("fraud_label"),
+                "threshold_used": data.get("threshold_used"),
+                "attribution": attribution,
+                "model_version": data.get("model_version"),
+                "inference_time_ms": data.get("inference_time_ms"),
             },
         )
     except Exception as e:

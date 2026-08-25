@@ -49,6 +49,3 @@ Thumbs.db
 
 # Disposable test database
 tests/_test.db
-
-# Evaluation output — regenerate with scripts/evaluate_ablation.py
-data/evaluation/

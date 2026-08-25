@@ -19,63 +19,30 @@ class LLMBackend(Protocol):
 
 
 class GeminiBackend:
-    """
-    Gemini via the google-genai SDK.
+    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
+        import google.generativeai as genai
 
-    Replaces google-generativeai, which Google has discontinued — it warned on
-    every import and no longer receives fixes.
-
-    The system prompt is passed as a real system_instruction rather than
-    concatenated into the user turn. That matters here: the Chain of Evidence
-    constraints are the mechanism this project is testing, and instructions
-    carry more weight in that channel than buried at the top of user content.
-    """
-
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
-        from google import genai
-
-        self._client = genai.Client(api_key=api_key)
+        genai.configure(api_key=api_key)
+        self._model = genai.GenerativeModel(
+            model_name=model,
+            system_instruction=None,  # injected per-call via contents
+        )
         self._model_name = model
-        logger.info(f"Gemini backend initialised: {model}")
+        logger.info(f"Gemini backend initialized: {model}")
 
     def generate(self, package: ForensicPromptPackage) -> str:
-        from google.genai import types
+        import google.generativeai as genai
 
-        response = self._client.models.generate_content(
-            model=self._model_name,
-            contents=package.user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=package.system_prompt,
-                # Near-deterministic: a forensic report should not vary run to
-                # run, and the ablation measurement depends on that stability.
-                temperature=0.1,
-                # Gemini 2.5+ spends tokens on internal reasoning before it
-                # emits any output, and that reasoning counts against this
-                # ceiling. A five-section report plus thinking overruns 2048,
-                # and an overrun returns an EMPTY body rather than a truncated
-                # one — so the symptom is a blank report, not a short one.
-                max_output_tokens=8192,
+        # Combine system + user into a single structured request
+        full_prompt = f"{package.system_prompt}\n\n{package.user_prompt}"
+        response = self._model.generate_content(
+            full_prompt,
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,       # low temp = deterministic, grounded output
+                max_output_tokens=2048,
             ),
         )
-
-        text = response.text
-        if not text:
-            # An empty body usually means a safety block or a token ceiling hit
-            # mid-generation. Silently returning "" would look like a model that
-            # had nothing to say.
-            reason = getattr(
-                getattr(response, "candidates", [None])[0], "finish_reason", None
-            )
-            hint = (
-                "the token ceiling was consumed by internal reasoning before "
-                "any output was produced — raise max_output_tokens"
-                if str(reason).endswith("MAX_TOKENS")
-                else "usually a safety block"
-            )
-            raise RuntimeError(
-                f"Gemini returned no text (finish_reason={reason}): {hint}."
-            )
-        return text
+        return response.text
 
 
 class OllamaBackend:

@@ -163,6 +163,48 @@ app.add_middleware(
 )
 
 
+# ── Project assistant ─────────────────────────────────────────────────────────
+# Grounded Q&A over the project's own documentation (see chatbot/README.md).
+# Optional: a failure to import must not take the API down, so it is guarded.
+try:
+    from chatbot import router as chatbot_router
+
+    app.include_router(chatbot_router)
+    logger.info("Project assistant mounted at /api/chat")
+except Exception as exc:  # noqa: BLE001
+    logger.warning(f"Project assistant unavailable: {exc}")
+
+# Operator assistant — tool-using agent over the live platform. Gated: disabled
+# by default, admin-enabled, entitled roles only (see assistant/entitlement.py).
+try:
+    from assistant import router as assistant_router
+
+    app.include_router(assistant_router)
+    logger.info("Operator assistant mounted at /api/assistant")
+except Exception as exc:  # noqa: BLE001
+    logger.warning(f"Operator assistant unavailable: {exc}")
+
+# Commercial enquiries. Public and unauthenticated — it creates nothing and
+# grants nothing, it only routes a message to the team.
+try:
+    from enquiry import router as enquiry_router
+
+    app.include_router(enquiry_router)
+    logger.info("Enquiry intake mounted at /api/enquiry")
+except Exception as exc:  # noqa: BLE001
+    logger.warning(f"Enquiry intake unavailable: {exc}")
+
+# Always-on transaction monitoring: the graph model screens everything and
+# escalates only what looks structurally suspicious.
+try:
+    from monitor import router as monitor_router
+
+    app.include_router(monitor_router)
+    logger.info("Monitor mounted at /api/monitor")
+except Exception as exc:  # noqa: BLE001
+    logger.warning(f"Monitor unavailable: {exc}")
+
+
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class TransactionData(BaseModel):
@@ -249,6 +291,9 @@ class AnalyzeResponse(BaseModel):
     # Rich upstream signals (populated when transaction data provided)
     behavioral_signal: Optional[str] = None
     graph_signal: Optional[str] = None
+    # Novelty 3's forensic subgraph: which accounts are implicated, the sink,
+    # the pattern, and per-edge attention weights. The evidence behind the score.
+    graph_evidence: Optional[dict] = None
     temporal_signal: Optional[str] = None
 
 
@@ -363,6 +408,40 @@ async def analyze(request: AnalyzeRequest):
                 raise HTTPException(status_code=status, detail=event.message)
 
     raise HTTPException(status_code=500, detail="Pipeline produced no result.")
+
+
+@app.get("/analyze/sample-transaction", tags=["analysis"])
+async def sample_transaction():
+    """One real transaction drawn from the graph service, ready to analyse.
+
+    The analyzer used to offer only hand-written scenarios with simulated
+    scores, which meant the page demonstrated the plumbing rather than the
+    system. These are genuine PaySim records between genuine accounts — the
+    same source the live monitor screens — so a run here exercises the real
+    model on real input.
+    """
+    import httpx
+
+    base = str(config.get("upstream", "graph_api_base")).rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"{base}/api/graph/sample-transactions", params={"n": 1})
+            r.raise_for_status()
+            txns = r.json().get("transactions") or []
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail=f"Graph service unreachable at {base}: {type(exc).__name__}",
+        )
+
+    if not txns:
+        raise HTTPException(status_code=503, detail="Graph service returned no transactions.")
+
+    txn = txns[0]
+    # Ground truth is for measuring the system, never for showing as a model
+    # output — strip it before it can reach the page.
+    is_fraud = txn.pop("_is_fraud", None)
+    return {"transaction": txn, "ground_truth_is_fraud": is_fraud}
 
 
 @app.post("/analyze/stream", tags=["analysis"])
@@ -1003,6 +1082,11 @@ async def delete_user_endpoint(username: str, user: User = Depends(require_admin
 
     await delete_user(username, actor=user.username)
     return {"status": "deleted", "username": username}
+
+
+# ── Analysis history ──────────────────────────────────────────────────────────
+# Recovered from the fusion_engine branch, which also deleted the chatbot and
+# assistant integration — so these were ported rather than the branch merged.
 
 
 @app.get("/analyses", tags=["analysis"])

@@ -1,0 +1,363 @@
+{
+  "summary": {
+    "grounded": {
+      "cases": 5,
+      "numeric_fidelity_mean": 1.0,
+      "fabricated_numbers_total": 0,
+      "fabricated_numbers_per_report": 0,
+      "fabricated_typology_ids_total": 6,
+      "reports_citing_fabricated_typology": 1,
+      "unsupported_patterns_total": 0,
+      "reports_with_unsupported_patterns": 0,
+      "missing_modality_instances": 0,
+      "missing_flagged": 0,
+      "missing_fabricated": 0,
+      "mean_report_chars": 2316
+    },
+    "baseline": {
+      "cases": 5,
+      "numeric_fidelity_mean": 0.9211832611832612,
+      "fabricated_numbers_total": 6,
+      "fabricated_numbers_per_report": 1.2,
+      "fabricated_typology_ids_total": 0,
+      "reports_citing_fabricated_typology": 0,
+      "unsupported_patterns_total": 5,
+      "reports_with_unsupported_patterns": 4,
+      "missing_modality_instances": 0,
+      "missing_flagged": 0,
+      "missing_fabricated": 0,
+      "mean_report_chars": 4040.8
+    }
+  },
+  "cases": [
+    {
+      "case": {
+        "transaction_id": "EVAL_001",
+        "scenario": "mule_network",
+        "confidence_score": 1.0,
+        "graph_score": 0.9196,
+        "behavioral_score": 0.8777,
+        "temporal_score": 0.6128,
+        "graph_available": true,
+        "behavioral_available": true,
+        "temporal_available": true,
+        "similarity_score": 0.6719,
+        "typology_id": "FATF-004",
+        "typology_name": "Account Takeover Fraud"
+      },
+      "grounded": {
+        "arm": "grounded",
+        "numbers_total": 22,
+        "numbers_grounded": 22,
+        "numbers_fabricated": 0,
+        "fabricated_examples": [],
+        "typology_ids_cited": [
+          "FATF-004",
+          "FATF-004",
+          "FATF-004",
+          "FATF-004",
+          "FATF-004",
+          "FATF-004"
+        ],
+        "typology_ids_fabricated": [],
+        "patterns_asserted": [
+          "account takeover"
+        ],
+        "patterns_unsupported": [],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 3098
+      },
+      "baseline": {
+        "arm": "baseline",
+        "numbers_total": 11,
+        "numbers_grounded": 10,
+        "numbers_fabricated": 1,
+        "fabricated_examples": [
+          "26"
+        ],
+        "typology_ids_cited": [],
+        "typology_ids_fabricated": [],
+        "patterns_asserted": [
+          "mule"
+        ],
+        "patterns_unsupported": [
+          "mule"
+        ],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 1834
+      },
+      "reports": {
+        "grounded": "---\nCASE INVESTIGATION REPORT\nTransaction ID: EVAL_001\nClassification: CRITICAL\nFATF Typology Match: Account Takeover Fraud (FATF-004) \u2014 67.2% similarity\n\nSECTION 1 \u2014 EXECUTIVE SUMMARY\nThe transaction EVAL_001 exhibits a Fused Fraud Confidence score of 1.0000 (100.0%), indicating a high probability of fraudulent activity. The dominant risk modality is identified through the Graph Network Analysis Score of 0.9196 (92.0%). This case strongly matches the Account Takeover Fraud typology with a similarity of 67.19%.\n\nSECTION 2 \u2014 MULTI-MODAL EVIDENCE ANALYSIS\nThe **Graph Network Analysis Score** is 0.9196 (92.0%). This high score indicates significant anomalies within the transaction's network connections, consistent with the \"Beneficiary accounts never previously transacted with by the account holder\" and \"Single large transfer to unknown beneficiary\" patterns described in the Account Takeover Fraud typology (FATF-004).\n\nThe **Behavioral Anomaly Score** is 0.8777 (87.8%). This score signifies a substantial deviation from established user behavior, directly supporting the Account Takeover Fraud typology (FATF-004) which identifies \"Behavioral anomalies\" as the primary detection signal and lists \"Sudden deviation from established transaction behavioral baseline\" as a key indicator.\n\nThe **Temporal Pattern Analysis Score** is 0.6128 (61.3%). This score indicates a moderate but significant deviation in the timing of the transaction. This aligns with the Account Takeover Fraud typology (FATF-004) indicator of \"Transactions occurring at unusual hours relative to account history\".\n\nSECTION 3 \u2014 TYPOLOGY GROUNDING\nThe numerical evidence pattern strongly matches the Account Takeover Fraud typology (FATF-004). The high Behavioral Anomaly Score of 0.8777 directly supports the typology's emphasis on \"Behavioral anomalies\" as the primary detection signal, specifically aligning with the indicator of \"Sudden deviation from established transaction behavioral baseline\". The Temporal Pattern Analysis Score of 0.6128 provides evidence consistent with \"Transactions occurring at unusual hours relative to account history\". Furthermore, the high Graph Network Analysis Score of 0.9196 supports patterns such as \"Beneficiary accounts never previously transacted with by the account holder\" and \"Single large transfer to unknown beneficiary following account access from anomalous device\", which are typical patterns of Account Takeover Fraud (FATF-004).\n\nSECTION 4 \u2014 FORENSIC CONFIDENCE ASSESSMENT\nThe Fused Fraud Confidence score for Transaction ID EVAL_001 is 1.0000 (100.0%). This score is derived from an ensemble fusion of the Graph Network Analysis Score (0.9196), Behavioral Anomaly Score (0.8777), and Temporal Pattern Analysis Score (0.6128). The typology match similarity score of 67.19% is sufficient to ground the identified Account Takeover Fraud typology. All sub-model risk scores were available for analysis; no data limitations from unavailable modalities were encountered.\n\nSECTION 5 \u2014 INVESTIGATIVE RECOMMENDATION\nBased on the Fused Fraud Confidence score of 1.0000, this",
+        "baseline": "## Case Investigation Report\n\n**Company:** Global Financial Forensics Inc.\n**Report Title:** Case Investigation Report\n**Case ID:** EVAL_001\n**Date:** October 26, 2023\n**Analyst:** Senior Financial Forensic Analyst\n\n---\n\n### SECTION 1 \u2014 EXECUTIVE SUMMARY\n\nTransaction ID EVAL_001 has been flagged with an **exceptionally high Fused Fraud Confidence score of 1.0000 (100.0%)**. This indicates an unequivocal and critical risk of fraudulent activity. The high confidence is primarily driven by severe anomalies detected in the Graph Network (91.96%) and Behavioral (87.77%) analyses, with a contributing factor from Temporal (61.28%) indicators.\n\nGiven the overwhelming evidence of fraud, immediate intervention is strongly recommended. This transaction is highly likely to be part of a sophisticated and potentially organized fraudulent scheme.\n\n---\n\n### SECTION 2 \u2014 MULTI-MODAL EVIDENCE ANALYSIS\n\nThis section details the findings from the various analytical models contributing to the overall fraud confidence score for Transaction ID EVAL_001.\n\n*   **Fused Fraud Confidence: 1.0000 (100.0%)**\n    *   This is the aggregate, synthesized score representing the system's highest possible confidence level in the fraudulent nature of the transaction. It signifies that all underlying models, when combined, point to an undeniable fraud event. This score serves as a definitive red flag, demanding immediate and decisive action.\n\n*   **Graph Network Score: 0.9196 (92.0%)**\n    *   An exceptionally high score, indicating that Transaction EVAL_001 is deeply embedded within or strongly connected to known fraudulent networks, entities, or accounts with a documented history of suspicious activity. This suggests direct or indirect links to fraud rings, mule accounts, compromised identities, or shared infrastructure (e.g., IP addresses,"
+      }
+    },
+    {
+      "case": {
+        "transaction_id": "EVAL_002",
+        "scenario": "layering",
+        "confidence_score": 1.0,
+        "graph_score": 0.8593,
+        "behavioral_score": 0.8754,
+        "temporal_score": 0.8058,
+        "graph_available": true,
+        "behavioral_available": true,
+        "temporal_available": true,
+        "similarity_score": 0.7369,
+        "typology_id": "FATF-004",
+        "typology_name": "Account Takeover Fraud"
+      },
+      "grounded": {
+        "arm": "grounded",
+        "numbers_total": 2,
+        "numbers_grounded": 2,
+        "numbers_fabricated": 0,
+        "fabricated_examples": [],
+        "typology_ids_cited": [
+          "FATF-004"
+        ],
+        "typology_ids_fabricated": [],
+        "patterns_asserted": [
+          "account takeover"
+        ],
+        "patterns_unsupported": [],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 280
+      },
+      "baseline": {
+        "arm": "baseline",
+        "numbers_total": 15,
+        "numbers_grounded": 13,
+        "numbers_fabricated": 2,
+        "fabricated_examples": [
+          "26",
+          "180"
+        ],
+        "typology_ids_cited": [],
+        "typology_ids_fabricated": [],
+        "patterns_asserted": [
+          "account takeover",
+          "mule"
+        ],
+        "patterns_unsupported": [
+          "account takeover",
+          "mule"
+        ],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 7083
+      },
+      "reports": {
+        "grounded": "---\nCASE INVESTIGATION REPORT\nTransaction ID: EVAL_002\nClassification: CRITICAL\nFATF Typology Match: Account Takeover Fraud (FATF-004) \u2014 73.7% similarity\n\nSECTION 1 \u2014 EXECUTIVE SUMMARY\nThe investigation of Transaction ID EVAL_002 reveals a fused fraud confidence score of 1.0000 (",
+        "baseline": "## FORENSIC CASE INVESTIGATION REPORT\n\n**CASE ID:** EVAL_002\n**DATE OF REPORT:** October 26, 2023\n**ANALYST:** [Your Name/Senior Financial Forensic Analyst]\n\n---\n\n### SECTION 1 \u2014 EXECUTIVE SUMMARY\n\nThis report details the forensic investigation into Transaction ID EVAL_002, which has been flagged with an exceptionally high Fused Fraud Confidence score of 1.0000 (100.0%). The analysis, leveraging multi-modal risk assessment models, indicates a near-certain probability of fraudulent activity. Key contributing factors include significant anomalies detected in the transaction's network connections, behavioral patterns, and temporal characteristics. Given the overwhelming evidence, immediate and decisive action is strongly recommended to mitigate potential financial loss and prevent further illicit activity.\n\n---\n\n### SECTION 2 \u2014 MULTI-MODAL EVIDENCE ANALYSIS\n\nThe high Fused Fraud Confidence for Transaction ID EVAL_002 is underpinned by consistently elevated risk scores across multiple independent analytical models:\n\n*   **Graph Network Score: 0.8593 (85.9%)**\n    *   This score indicates that Transaction EVAL_002 is deeply embedded within or closely connected to a network structure highly indicative of fraud. This could involve links to known fraudulent entities, suspicious clusters of accounts, unusual beneficiary relationships, or atypical transaction flows that deviate significantly from legitimate network patterns. The high score suggests a strong likelihood of collusion or participation in a broader fraudulent scheme.\n\n*   **Behavioral Score: 0.8754 (87.5%)**\n    *   The elevated behavioral score points to significant deviations from the established legitimate behavioral profile of the involved parties (e.g., sender, receiver, account holder). This could manifest as unusual transaction amounts, frequencies, types of goods/services, login patterns from new devices/locations, or rapid changes in typical spending habits. Such anomalies strongly suggest an account takeover, synthetic identity usage, or an individual acting outside their normal, legitimate financial conduct.\n\n*   **Temporal Score: 0.8058 (80.6%)**\n    *   The high temporal score highlights suspicious timing, frequency, or sequencing of events related to Transaction EVAL_002. This might include transactions occurring at unusual hours (e.g., late night, holidays), a sudden burst of activity after a period of dormancy, rapid successive transactions that defy normal user interaction speeds, or a pattern of transactions designed to circumvent detection thresholds. This suggests an attempt to exploit system vulnerabilities or execute illicit activities under cover of unusual timing.\n\n---\n\n### SECTION 3 \u2014 PATTERN ASSESSMENT\n\nThe convergence of high scores across Graph Network, Behavioral, and Temporal dimensions paints a clear picture of a sophisticated and likely coordinated fraudulent pattern.\n\n*   **Coordinated Scheme:** The high Graph Network score, combined with the Behavioral and Temporal anomalies, strongly suggests that EVAL_002 is not an isolated incident but rather part of a larger, potentially organized fraudulent operation. The network connections provide the \"who,\" while the behavioral and temporal aspects describe the \"how\" and \"when.\"\n*   **Account Compromise/Takeover or Synthetic Identity:** The behavioral deviations are highly consistent with an account being compromised or operated by an unauthorized party. The temporal anomalies further support this, as fraudsters often operate outside normal user hours or execute transactions rapidly to maximize illicit gains before detection.\n*   **Rapid Execution and Obfuscation:** The temporal score indicates an attempt to execute the transaction quickly or in a manner that avoids immediate scrutiny. This, coupled with the network score, suggests an effort to move funds or assets through a complex web to obscure the true origin or destination.\n\nIn essence, the data points to a transaction executed by an entity exhibiting highly suspicious behavior, connected to a fraudulent network, and operating under unusual temporal conditions, all hallmarks of a deliberate and high-risk fraudulent act.\n\n---\n\n### SECTION 4 \u2014 CONFIDENCE ASSESSMENT\n\nThe Fused Fraud Confidence score of 1.0000 (100.0%) for Transaction ID EVAL_002 represents the highest possible level of certainty in the fraud detection system. This absolute confidence is derived from:\n\n*   **Consistent High Scores:** All individual modal scores (Graph Network, Behavioral, Temporal) are significantly elevated and mutually reinforcing, indicating a strong consensus across diverse analytical perspectives.\n*   **Absence of Contradictory Evidence:** There is no conflicting data or mitigating factors that would reduce the overall fraud probability.\n*   **Robust Model Aggregation:** The fusion model has likely identified a pattern that has historically been unequivocally linked to confirmed fraud cases, leading to this definitive assessment.\n\nThis level of confidence implies that the transaction exhibits characteristics that are virtually indistinguishable from known fraudulent activities within the system's historical data and learned patterns.\n\n---\n\n### SECTION 5 \u2014 INVESTIGATIVE RECOMMENDATION\n\nBased on the overwhelming evidence and the 100.0% Fused Fraud Confidence, the following immediate and subsequent investigative actions are strongly recommended:\n\n1.  **Immediate Action (Critical):**\n    *   **Transaction Hold/Reversal:** Immediately place a hold on Transaction ID EVAL_002. If funds have already been disbursed, initiate an immediate reversal or recall process.\n    *   **Account Suspension:** Temporarily suspend all accounts involved in Transaction EVAL_002 (sender, receiver, and any directly linked accounts identified by the graph network analysis) to prevent further activity.\n    *   **Notification:** Alert relevant internal stakeholders (e.g., fraud operations, risk management, legal) of the high-confidence fraud event.\n\n2.  **Further Investigation (High Priority):**\n    *   **Deep Dive into Network Connections:** Conduct a comprehensive manual review of all entities connected to the high Graph Network score. Identify all associated accounts, IP addresses, device IDs, and physical addresses.\n    *   **Behavioral Forensics:** Analyze the full transaction history and login patterns of the involved accounts for the past 90-180 days to identify the precise point of behavioral deviation and potential account compromise.\n    *   **Temporal Anomaly Review:** Investigate the specific temporal patterns identified (e.g., exact timestamps, frequency bursts) to understand the modus operandi and identify any other transactions exhibiting similar patterns.\n    *   **Beneficiary Tracing:** If applicable, trace the ultimate beneficiary of the funds to identify potential mule accounts or illicit organizations.\n    *   **Cross-Referencing:** Cross-reference all identified entities (names, addresses, IPs, devices) against internal watchlists, external fraud databases, and public records.\n\n3.  **Reporting"
+      }
+    },
+    {
+      "case": {
+        "transaction_id": "EVAL_003",
+        "scenario": "smurfing",
+        "confidence_score": 0.9996,
+        "graph_score": 0.5662,
+        "behavioral_score": 0.3599,
+        "temporal_score": 0.8539,
+        "graph_available": true,
+        "behavioral_available": true,
+        "temporal_available": true,
+        "similarity_score": 0.7279,
+        "typology_id": "FATF-007",
+        "typology_name": "Temporal Velocity Fraud / Rapid Movement"
+      },
+      "grounded": {
+        "arm": "grounded",
+        "numbers_total": 21,
+        "numbers_grounded": 21,
+        "numbers_fabricated": 0,
+        "fabricated_examples": [],
+        "typology_ids_cited": [
+          "FATF-007",
+          "FATF-007",
+          "FATF-007",
+          "FATF-007",
+          "FATF-007",
+          "FATF-007",
+          "FATF-007",
+          "FATF-007"
+        ],
+        "typology_ids_fabricated": [],
+        "patterns_asserted": [
+          "placement"
+        ],
+        "patterns_unsupported": [],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 3066
+      },
+      "baseline": {
+        "arm": "baseline",
+        "numbers_total": 15,
+        "numbers_grounded": 14,
+        "numbers_fabricated": 1,
+        "fabricated_examples": [
+          "26"
+        ],
+        "typology_ids_cited": [],
+        "typology_ids_fabricated": [],
+        "patterns_asserted": [
+          "mule"
+        ],
+        "patterns_unsupported": [
+          "mule"
+        ],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 3661
+      },
+      "reports": {
+        "grounded": "---\nCASE INVESTIGATION REPORT\nTransaction ID: EVAL_003\nClassification: CRITICAL\nFATF Typology Match: Temporal Velocity Fraud / Rapid Movement (FATF-007) \u2014 72.79% similarity\n\nSECTION 1 \u2014 EXECUTIVE SUMMARY\nThis investigation identifies a high-confidence fraud event with a Fused Fraud Confidence score of 0.9996 (100.0%). The primary risk driver is the Temporal Pattern Analysis Score of 0.8539 (85.4%), strongly indicating a match to the Temporal Velocity Fraud / Rapid Movement typology (FATF-007).\n\nSECTION 2 \u2014 MULTI-MODAL EVIDENCE ANALYSIS\nThe Graph Network Analysis Score is 0.5662 (56.6%). This score indicates a medium level of interconnectedness or structural complexity within the transaction flow, consistent with the \"Graph Signal: medium\" characteristic of Temporal Velocity Fraud (FATF-007), which often involves a chain of transfers.\n\nThe Behavioral Anomaly Score is 0.3599 (36.0%). This score suggests the presence of some unusual account behavior, aligning with the \"Behavioral Signal: medium\" noted in Temporal Velocity Fraud (FATF-007), where funds are typically exhausted rapidly from an account.\n\nThe Temporal Pattern Analysis Score is 0.8539 (85.4%). This score represents a very high probability of temporal manipulation, directly supporting the core characteristic of Temporal Velocity Fraud (FATF-007), which is defined by an abnormally high transaction velocity and machine-speed intervals.\n\nSECTION 3 \u2014 TYPOLOGY GROUNDING\nThe numerical evidence strongly grounds the match to Temporal Velocity Fraud / Rapid Movement (FATF-007). The Temporal Pattern Analysis Score of 0.8539 (85.4%) directly supports the typology's description of \"abnormally high transaction velocity\" and \"sequential transfers executed in automated, machine-speed intervals,\" as well as \"transaction timestamps clustered in seconds-to-milliseconds intervals.\" The Graph Network Analysis Score of 0.5662 (56.6%) aligns with the \"Chain of transfers completing total displacement within a single business hour\" behavioral indicator. The Behavioral Anomaly Score of 0.3599 (36.0%) is consistent with \"Funds fully exhausted from account within minutes of receipt\" and \"Account balance reduced to near-zero within detection window,\" which are typical patterns of FATF-007.\n\nSECTION 4 \u2014 FORENSIC CONFIDENCE ASSESSMENT\nThe Fused Fraud Confidence score for Transaction ID EVAL_003 is 0.9996 (100.0%). This score is derived from an ensemble fusion of the sub-model risk scores, with the Temporal Pattern Analysis Score being the most significant contributor. The Typology Match Similarity of 72.79% is sufficient to definitively ground the identified typology, indicating a strong correlation between the observed patterns and the documented characteristics of Temporal Velocity Fraud / Rapid Movement (FATF-007). All modality scores were available for analysis; therefore, no data limitations from unavailable modalities are present.\n\nSECTION 5 \u2014 INVESTIGATIVE RECOMMENDATION\nBased on the Fused Fraud Confidence score of 0.9996, this case is to be ESCALATED FOR IMMEDIATE REVIEW.\n---",
+        "baseline": "## Case Investigation Report: Transaction ID EVAL_003\n\n**Date:** October 26, 2023\n**Analyst:** Senior Financial Forensic Analyst\n**Case ID:** EVAL_003\n\n---\n\n### SECTION 1 \u2014 EXECUTIVE SUMMARY\n\nThis report details the forensic investigation of Transaction ID EVAL_003, which has been flagged with an exceptionally high Fused Fraud Confidence score of 0.9996 (100.0%). The aggregated risk assessment indicates a near-certain probability of fraudulent activity associated with this transaction. Key contributing factors include a significantly elevated Temporal Score (85.4%), suggesting critical timing anomalies, and a moderate Graph Network Score (56.6%), indicating suspicious connections within the transactional network. While the Behavioral Score (36.0%) is comparatively low, the combined evidence strongly points towards a sophisticated fraudulent scheme. Immediate action and comprehensive follow-up investigation are highly recommended.\n\n---\n\n### SECTION 2 \u2014 MULTI-MODAL EVIDENCE ANALYSIS\n\nThe fraud confidence for Transaction ID EVAL_003 is derived from a multi-modal analysis, integrating various risk indicators:\n\n*   **Fused Fraud Confidence: 0.9996 (100.0%)**\n    *   This score represents the overall, aggregated probability of fraud, combining insights from all underlying models. The near-perfect score indicates an overwhelming consensus across the detection system that this transaction is fraudulent. This level of confidence typically warrants immediate and decisive action.\n\n*   **Graph Network Score: 0.5662 (56.6%)**\n    *   This moderate score suggests that Transaction EVAL_003 exhibits suspicious connections within the broader transactional network. Indicators contributing to this score could include shared IP addresses, devices, email addresses, physical addresses, or beneficiaries with known fraudulent accounts or entities. While not the primary driver of the overall fraud confidence, it indicates that the transaction is not isolated and is likely part of a connected web of activity, potentially involving mule accounts or a coordinated attack.\n\n*   **Behavioral Score: 0.3599 (36.0%)**\n    *   A relatively low behavioral score indicates that the individual actions or sequence of actions within this specific transaction, when viewed in isolation against typical user behavior patterns, are not highly anomalous. This could imply several scenarios:\n        *   The perpetrator is mimicking legitimate user behavior effectively.\n        *   The behavioral model may not be sensitive to the specific type of behavioral deviation present.\n        *   The fraud primarily relies on other vectors (temporal, network) rather than overt behavioral anomalies.\n        *   The transaction might be part of a larger scheme where individual steps appear benign but are fraudulent in context.\n\n*   **Temporal Score: 0.8539 (85.4%)**\n    *   This exceptionally high score is a critical indicator of fraud. It signifies significant anomalies related to the timing and sequence of events surrounding Transaction EVAL_003. Potential temporal red flags include:\n        *   Transaction occurring at unusual hours (e.g., late night, early morning, holidays) for the account holder.\n        *   Rapid succession of transactions, particularly after a period of dormancy or a recent account change (e.g., password reset, address change).\n        *   Unusual speed of transaction completion or interaction with the system.\n        *   Deviation from established historical transaction patterns in terms of frequency or timing.\n        *   Synchronization with other suspicious events (e.g., multiple logins from different locations within a short"
+      }
+    },
+    {
+      "case": {
+        "transaction_id": "EVAL_004",
+        "scenario": "account_takeover",
+        "confidence_score": 1.0,
+        "graph_score": 0.1021,
+        "behavioral_score": 0.9687,
+        "temporal_score": 0.7733,
+        "graph_available": true,
+        "behavioral_available": true,
+        "temporal_available": true,
+        "similarity_score": 0.7162,
+        "typology_id": "FATF-004",
+        "typology_name": "Account Takeover Fraud"
+      },
+      "grounded": {
+        "arm": "grounded",
+        "numbers_total": 17,
+        "numbers_grounded": 17,
+        "numbers_fabricated": 0,
+        "fabricated_examples": [],
+        "typology_ids_cited": [
+          "FATF-004",
+          "FATF-004",
+          "FATF-004",
+          "FATF-004",
+          "FATF-004",
+          "FATF-004",
+          "FATF-004"
+        ],
+        "typology_ids_fabricated": [],
+        "patterns_asserted": [
+          "account takeover"
+        ],
+        "patterns_unsupported": [],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 2797
+      },
+      "baseline": {
+        "arm": "baseline",
+        "numbers_total": 21,
+        "numbers_grounded": 20,
+        "numbers_fabricated": 1,
+        "fabricated_examples": [
+          "26"
+        ],
+        "typology_ids_cited": [],
+        "typology_ids_fabricated": [],
+        "patterns_asserted": [
+          "account takeover"
+        ],
+        "patterns_unsupported": [
+          "account takeover"
+        ],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 4499
+      },
+      "reports": {
+        "grounded": "---\nCASE INVESTIGATION REPORT\nTransaction ID: EVAL_004\nClassification: CRITICAL\nFATF Typology Match: Account Takeover Fraud (FATF-004) \u2014 71.6% similarity\n\nSECTION 1 \u2014 EXECUTIVE SUMMARY\nThe overall fused fraud confidence for Transaction ID EVAL_004 is 1.0000 (100.0%). This high confidence is predominantly driven by significant behavioral and temporal anomalies, aligning with the characteristics of Account Takeover Fraud (FATF-004). The typology match similarity is 71.62%.\n\nSECTION 2 \u2014 MULTI-MODAL EVIDENCE ANALYSIS\nThe Graph Network Analysis Score is 0.1021 (10.2%), indicating a low level of risk detected through network relationships. This aligns with the Account Takeover Fraud (FATF-004) typology's expected \"Graph Signal: low\".\nThe Behavioral Anomaly Score is 0.9687 (96.9%), indicating a high level of deviation from established user behavior. This strongly supports the Account Takeover Fraud (FATF-004) typology, which identifies \"Behavioral Signal: high\" and states that \"Behavioral anomalies are the primary detection signal\".\nThe Temporal Pattern Analysis Score is 0.7733 (77.3%), indicating significant temporal inconsistencies. This aligns with the Account Takeover Fraud (FATF-004) typology's expected \"Temporal Signal: high\" and behavioral indicators such as \"Transactions occurring at unusual hours relative to account history\".\n\nSECTION 3 \u2014 TYPOLOGY GROUNDING\nThe numerical evidence pattern for Transaction ID EVAL_004 strongly matches the Account Takeover Fraud (FATF-004) typology. The Behavioral Anomaly Score of 0.9687 directly supports the typology's behavioral indicator of \"Sudden deviation from established transaction behavioral baseline\". The Temporal Pattern Analysis Score of 0.7733 supports the indicator of \"Transactions occurring at unusual hours relative to account history\". Furthermore, the Graph Network Analysis Score of 0.1021 is consistent with the typology's specified \"Graph Signal: low\", while the high Behavioral Anomaly Score and Temporal Pattern Analysis Score align with the typology's \"Behavioral Signal: high\" and \"Temporal Signal: high\" expectations, respectively.\n\nSECTION 4 \u2014 FORENSIC CONFIDENCE ASSESSMENT\nThe fused fraud confidence for Transaction ID EVAL_004 is 1.0000 (100.0%). This ensemble fusion is based on the convergence of high Behavioral Anomaly and Temporal Pattern Analysis scores, which are consistent with the expected signals for Account Takeover Fraud (FATF-004). The typology match similarity score of 71.62% is sufficient to ground the identified typology. All modality scores were available for analysis; no data limitations from unavailable modalities were encountered.\n\nSECTION 5 \u2014 INVESTIGATIVE RECOMMENDATION\nBased on the fused fraud confidence score of 1.0000, this case is to be ESCALATED FOR IMMEDIATE REVIEW.\n---",
+        "baseline": "## Forensic Case Investigation Report\n\n**Transaction ID:** EVAL_004\n**Date of Report:** October 26, 2023\n**Prepared By:** Senior Financial Forensic Analyst\n\n---\n\n### SECTION 1 \u2014 EXECUTIVE SUMMARY\n\nThis report details the forensic investigation of Transaction ID EVAL_004, which has been flagged with an exceptionally high Fused Fraud Confidence score of 100.0%. The analysis reveals a critical risk profile primarily driven by severe behavioral anomalies (96.9%) and unusual temporal patterns (77.3%). While the Graph Network Score is relatively low (10.2%), indicating a potential lack of direct linkage to known large-scale fraud networks, the overwhelming evidence from other modalities strongly points towards a fraudulent event. Immediate intervention and comprehensive investigation are recommended to mitigate potential financial loss and prevent further compromise.\n\n---\n\n### SECTION 2 \u2014 MULTI-MODAL EVIDENCE ANALYSIS\n\nThe assessment of Transaction ID EVAL_004 involved a multi-modal analysis, integrating various risk indicators:\n\n*   **Fused Fraud Confidence: 1.0000 (100.0%)**\n    This score represents the aggregated, overall confidence level that the transaction is fraudulent, combining insights from all underlying models. A score of 100.0% signifies a definitive and unequivocal classification of fraud, indicating that the combined evidence leaves no reasonable doubt regarding its malicious nature.\n\n*   **Graph Network Score: 0.1021 (10.2%)**\n    This score assesses the transaction's connections and relationships within a broader network of entities (e.g., accounts, devices, IP addresses). A low score of 10.2% suggests that, based on current network intelligence, this transaction is not strongly linked to known fraudulent clusters or established fraud rings. This could imply an isolated incident, an account takeover by an individual, or a new, unmapped fraud pattern.\n\n*   **Behavioral Score: 0.9687 (96.9%)**\n    This score evaluates the user's actions and patterns leading up to and during the transaction against their historical behavior and peer group norms. An extremely high score of 96.9% indicates significant deviations from expected behavior. This could manifest as unusual login locations, device changes, rapid sequence of actions, atypical transaction amounts, or attempts to modify critical account information. This is a primary driver of the overall fraud confidence.\n\n*   **Temporal Score: 0.7733 (77.3%)**\n    This score analyzes the timing, sequence, and speed of the transaction and related activities. A high score of 77.3% suggests unusual temporal patterns, such as transactions occurring at odd hours, an abnormally quick succession of events (e.g., login, transfer, logout within seconds), or a transaction initiated immediately after a suspicious account change. This further reinforces the highly anomalous nature of the event.\n\n---\n\n### SECTION 3 \u2014 PATTERN ASSESSMENT\n\nBased on the multi-modal evidence, the following patterns are assessed for Transaction ID EVAL_004:\n\n*   **Strong Indicators of Account Takeover (ATO) or Sophisticated Individual Fraud:** The confluence of an extremely high Behavioral Score (96.9%) and a high Temporal Score (77.3%) strongly points towards an event where an unauthorized party has gained control of an account or is executing a highly anomalous transaction. The behavioral anomalies suggest actions inconsistent with the legitimate account holder, while temporal anomalies indicate urgency, automation, or unusual timing characteristic of fraudulent attempts.\n*   **Isolated Incident or Emerging Threat:** The relatively low Graph Network Score (10.2%) suggests that this specific transaction, while highly fraudulent, may not be directly connected to a large, established fraud network detectable by current graph models. This could mean it's an isolated account takeover, a \"smash and grab\" attempt by an individual perpetrator, or potentially an emerging fraud pattern that has not yet been sufficiently mapped into network intelligence. It does not diminish the fraudulence but rather informs the *type* of fraud.\n*   **Urgent and Deliberate Action:** The high temporal score, combined with behavioral flags, implies a deliberate and possibly rapid execution of the fraudulent act, aiming to complete the transaction before detection. This could involve automated scripts or a highly focused manual effort.\n\nIn summary, the pattern suggests a high-impact, potentially isolated fraudulent event driven by"
+      }
+    },
+    {
+      "case": {
+        "transaction_id": "EVAL_005",
+        "scenario": "velocity_fraud",
+        "confidence_score": 1.0,
+        "graph_score": 0.5505,
+        "behavioral_score": 0.5521,
+        "temporal_score": 0.9481,
+        "graph_available": true,
+        "behavioral_available": true,
+        "temporal_available": true,
+        "similarity_score": 0.6636,
+        "typology_id": "FATF-007",
+        "typology_name": "Temporal Velocity Fraud / Rapid Movement"
+      },
+      "grounded": {
+        "arm": "grounded",
+        "numbers_total": 16,
+        "numbers_grounded": 16,
+        "numbers_fabricated": 0,
+        "fabricated_examples": [],
+        "typology_ids_cited": [
+          "FATF-001",
+          "FATF-001",
+          "FATF-001",
+          "FATF-001",
+          "FATF-001",
+          "FATF-001"
+        ],
+        "typology_ids_fabricated": [
+          "FATF-001",
+          "FATF-001",
+          "FATF-001",
+          "FATF-001",
+          "FATF-001",
+          "FATF-001"
+        ],
+        "patterns_asserted": [
+          "placement"
+        ],
+        "patterns_unsupported": [],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 2339
+      },
+      "baseline": {
+        "arm": "baseline",
+        "numbers_total": 18,
+        "numbers_grounded": 17,
+        "numbers_fabricated": 1,
+        "fabricated_examples": [
+          "26"
+        ],
+        "typology_ids_cited": [],
+        "typology_ids_fabricated": [],
+        "patterns_asserted": [],
+        "patterns_unsupported": [],
+        "missing_modalities": [],
+        "missing_flagged": [],
+        "missing_fabricated": [],
+        "report_chars": 3127
+      },
+      "reports": {
+        "grounded": "---\nCASE INVESTIGATION REPORT\nTransaction ID: EVAL_005\nClassification: CRITICAL\nFATF Typology Match: Temporal Velocity Fraud / Rapid Movement (FATF-001) \u2014 66.36% similarity\n\nSECTION 1 \u2014 EXECUTIVE SUMMARY\nThis investigation identifies a high-confidence fraud event with a Fused Fraud Confidence score of 1.0000 (100.0%). The primary driver for this assessment is a Temporal Pattern Analysis Score of 0.9481 (94.8%), strongly indicating a match with the \"Temporal Velocity Fraud / Rapid Movement\" (FATF-001) typology.\n\nSECTION 2 \u2014 MULTI-MODAL EVIDENCE ANALYSIS\n*   **Graph Network Analysis Score:** The Graph Network Analysis Score is 0.5505 (55.0%). This score indicates a medium level of structural anomaly within the transaction network, consistent with the \"Graph Signal: medium\" indicator documented for Temporal Velocity Fraud / Rapid Movement (FATF-001).\n*   **Behavioral Anomaly Score:** The Behavioral Anomaly Score is 0.5521 (55.2%). This score suggests a medium deviation from established behavioral baselines, aligning with the \"Behavioral Signal: medium\" indicator for Temporal Velocity Fraud / Rapid Movement (FATF-001).\n*   **Temporal Pattern Analysis Score:** The Temporal Pattern Analysis Score is 0.9481 (94.8%). This exceptionally high score definitively indicates an abnormal temporal pattern in the transaction activity, directly corresponding to the \"Temporal Signal: high\" indicator for Temporal Velocity Fraud / Rapid Movement (FATF-001).\n\nSECTION 3 \u2014 TYPOLOGY GROUNDING\nThe numerical evidence strongly grounds the case in the \"Temporal Velocity Fraud / Rapid Movement\" (FATF-001) typology. The Temporal Pattern Analysis Score of 0.9481 (94.8%) directly supports the typology's description of \"abnormally high transaction velocity\" and \"number of fund transfers per unit time.\" This score is consistent with behavioral indicators such as \"Sequential transfers executed in automated, machine-speed intervals,\" \"Transaction timestamps clustered in seconds-to-milliseconds intervals,\" and a \"Chain of transfers completing total displacement within a single business hour.\" The pattern aligns with the typical characteristic of \"10\u201350 sequential transfers completed within 30 minutes. Uniform time intervals between transactions suggesting automated scripting. Account balance reduced to near-zero within detection window",
+        "baseline": "## FORENSIC CASE INVESTIGATION REPORT\n\n**CASE ID:** EVAL_005\n**DATE OF REPORT:** October 26, 2023\n**ANALYST:** Senior Financial Forensic Analyst\n\n---\n\n### SECTION 1 \u2014 EXECUTIVE SUMMARY\n\nThis report details the forensic investigation into Transaction ID EVAL_005, which has been flagged with an exceptionally high Fused Fraud Confidence score of 100.0%. The analysis of multi-modal risk indicators strongly indicates that this transaction is fraudulent. The primary driver for this definitive assessment is an extreme temporal anomaly (Temporal Score: 94.8%), suggesting the transaction occurred at a highly unusual or prohibited time, or exhibited an abnormal frequency/sequence. While network and behavioral indicators show moderate deviations (Graph Network Score: 55.0%, Behavioral Score: 55.2%), their combined effect, particularly when amplified by the critical temporal red flag, leads to an unequivocal conclusion of fraud. Immediate action is recommended to mitigate potential losses and prevent further fraudulent activity.\n\n---\n\n### SECTION 2 \u2014 MULTI-MODAL EVIDENCE ANALYSIS\n\nThe following risk scores were analyzed for Transaction ID EVAL_005:\n\n*   **Fused Fraud Confidence: 1.0000 (100.0%)**\n    *   This is the aggregated, overall confidence level that the transaction is fraudulent. A score of 100% signifies absolute certainty based on the combined evidence, leaving no reasonable doubt regarding its fraudulent nature.\n\n*   **Graph Network Score: 0.5505 (55.0%)**\n    *   This score assesses the transaction's position and connections within a network of entities (e.g., accounts, devices, IP addresses). A score of 55.0% indicates a moderate level of suspicious network activity. This could suggest the involvement of entities with known links to fraudulent activities, unusual connection patterns, or a deviation from typical network behavior for the associated user/account. While not an extreme outlier on its own, it contributes to the overall risk profile.\n\n*   **Behavioral Score: 0.5521 (55.2%)**\n    *   This score evaluates the behavioral patterns associated with the transaction, comparing them against established baselines for the user or entity. A score of 55.2% points to moderate deviations from normal or expected behavior. This might include unusual transaction amounts, types, frequencies, or recipient patterns that are uncharacteristic of the legitimate account holder. Similar to the Graph Network Score, it's a contributing factor rather than a standalone definitive indicator.\n\n*   **Temporal Score: 0.9481 (94.8%)**\n    *   This score is a critical indicator, assessing the timing and sequence of the transaction. A score of 94.8% represents an extremely high temporal anomaly. This strongly suggests that the transaction occurred at an unusual or prohibited time (e.g., deep in the night for a typically daytime user), exhibited an abnormal frequency (e.g., rapid-fire transactions), or deviated significantly from historical temporal patterns. This score is the most significant individual piece of evidence, acting as a primary red flag for potential fraud.\n\n---\n\n### SECTION 3 \u2014 PAT"
+      }
+    }
+  ]
+}

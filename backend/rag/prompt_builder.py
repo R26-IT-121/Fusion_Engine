@@ -40,6 +40,7 @@ def build_chain_of_evidence_prompt(
     temporal_available: bool,
     retrieval: RetrievalResult,
     upstream_context: Optional[UpstreamContext] = None,
+    classification: Optional[str] = None,
 ) -> ForensicPromptPackage:
     """
     Builds the two-part prompt (system + user) for the LLM forensic analyst.
@@ -123,6 +124,12 @@ MANDATORY CHAIN OF EVIDENCE RULES — you MUST follow all of these without excep
                 + "\n\n".join(signals)
             )
 
+    # The system has already classified this transaction; handing the model the
+    # answer removes a hallucination surface (it cannot disagree with our own
+    # banding) and removes the instruction text it used to echo verbatim into
+    # the finished report — "Classification: LOW — derive from confidence score".
+    classification_line = classification or "[CRITICAL / HIGH / MEDIUM / LOW]"
+
     user_prompt = f"""Generate a forensic case investigation report using ONLY the evidence below.
 
 ══════════════════════════════════════════════════════
@@ -148,7 +155,7 @@ Generate the report in EXACTLY this five-section format:
 ---
 CASE INVESTIGATION REPORT
 Transaction ID: {transaction_id}
-Classification: [CRITICAL / HIGH / MEDIUM / LOW] — derive from confidence score
+Classification: {classification_line}
 FATF Typology Match: [Typology Name] ({retrieval.typology_id}) — {retrieval.similarity_score:.1%} similarity
 
 SECTION 1 — EXECUTIVE SUMMARY

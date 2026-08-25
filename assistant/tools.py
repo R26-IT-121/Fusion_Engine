@@ -240,6 +240,46 @@ async def _system_status(**_) -> dict:
     return {"upstream": dict(zip(names, results))}
 
 
+async def _live_activity(**kwargs) -> dict:
+    """What the monitor is seeing right now.
+
+    This is the difference between an assistant that can describe the platform
+    and one an analyst can actually use during an incident: it answers "what is
+    happening" from live state, not documentation.
+    """
+    try:
+        from monitor.state import STATE
+    except Exception as exc:                           # noqa: BLE001
+        return {"error": f"Monitor unavailable: {type(exc).__name__}: {exc}"}
+
+    limit = min(int(kwargs.get("limit", 8) or 8), 25)
+    severity = (kwargs.get("severity") or "").upper()
+
+    snap = STATE.snapshot(events=40)
+    alerts = snap["alerts"]
+    if severity in {"MEDIUM", "HIGH", "CRITICAL"}:
+        alerts = [a for a in alerts if a.get("severity") == severity]
+
+    # Recent escalations explain WHY the counters moved, which is usually the
+    # real question behind "what is going on".
+    escalations = [
+        e for e in snap["events"] if e.get("kind") == "escalated"
+    ][-limit:]
+
+    return {
+        "running": snap["running"],
+        "counters": snap["counters"],
+        "stages": snap["stages"],
+        "open_alerts": alerts[:limit],
+        "recent_escalations": escalations,
+        "note": (
+            "Counters are since the monitor last started. An alert is a fused "
+            "verdict at MEDIUM or above; an escalation is the graph model "
+            "tripping its watch threshold."
+        ),
+    }
+
+
 async def _search_docs(**kwargs) -> dict:
     """Look something up in the project documentation (shared with the public bot)."""
     query = str(kwargs.get("query", "")).strip()
@@ -323,6 +363,21 @@ TOOLS: dict[str, Tool] = {
             ),
             parameters={},
             run=_system_status,
+        ),
+        Tool(
+            name="get_live_activity",
+            description=(
+                "What the live monitor is seeing RIGHT NOW: how many "
+                "transactions have been screened, what escalated, which "
+                "alerts are open and at what severity, and which detectors "
+                "are currently running. Use for 'what is happening', 'why did "
+                "I get an alert', 'anything critical', 'is the monitor busy'."
+            ),
+            parameters={
+                "severity": "optional MEDIUM | HIGH | CRITICAL filter",
+                "limit": "optional int, default 8, max 25",
+            },
+            run=_live_activity,
         ),
         Tool(
             name="search_documentation",
