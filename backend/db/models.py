@@ -215,3 +215,62 @@ class AuditLog(Base):
 
     def __repr__(self) -> str:
         return f"<AuditLog {self.timestamp} {self.actor} {self.action} {self.outcome}>"
+
+
+class SarStatus(str, Enum):
+    """Lifecycle of a suspicious-activity report draft.
+
+    APPROVED means a named human read the draft and accepted it. It does not
+    mean anything was filed — this system never files, and the distinction is
+    the whole point of the status existing.
+    """
+
+    DRAFT = "draft"
+    UNDER_REVIEW = "under_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class SarDraft(Base):
+    """A generated SAR/STR draft and its review trail.
+
+    A suspicious-activity report is a legal statement made by a named officer.
+    The model may only ever produce a *draft*: the generated text is kept
+    immutable in `generated_text` so it can always be compared against what a
+    human actually approved in `edited_text`, and approval records who accepted
+    it and when.
+
+    Nothing here transmits anything to a regulator. Filing stays a deliberate
+    human act in the institution's own system of record.
+    """
+
+    __tablename__ = "sar_drafts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analysis_records.id"), index=True, nullable=False
+    )
+
+    # The model's output, never overwritten — the audit trail depends on being
+    # able to show what was generated versus what was approved.
+    generated_text: Mapped[str] = mapped_column(Text, nullable=False)
+    edited_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=SarStatus.DRAFT.value, index=True
+    )
+
+    # Provenance: which model wrote it, against which evidence.
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    generated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<SarDraft {self.id} analysis={self.analysis_id} {self.status}>"

@@ -50,5 +50,9 @@ Thumbs.db
 # Disposable test database
 tests/_test.db
 
-# Evaluation output � regenerate with scripts/evaluate_ablation.py
-data/evaluation/
+# Run logs — dated per-component output, regenerated on every run
+logs/
+
+# Runtime state, set through the console — not source
+report_style.json
+graph_explorer.json

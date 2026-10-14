@@ -28,9 +28,25 @@ class FATFKnowledgeBase:
         self._embedder: SentenceTransformer | None = None
 
     def _get_embedder(self) -> SentenceTransformer:
+        """Load the embedder, pinned to the CPU.
+
+        Left to itself sentence-transformers picks Apple's Metal backend
+        because it is available, and PyTorch's MPS shader cache is not safe to
+        call from several threads at once. FastAPI serves sync endpoints from a
+        threadpool, so two requests arriving together — a page that asks for a
+        typology list and an analysis in the same breath — put two threads
+        inside the same Metal pipeline and segfault the process. It is not an
+        exception that can be caught; the interpreter dies.
+
+        There is nothing to gain here anyway: the knowledge base is ten short
+        typologies, and encoding them on the CPU is a few milliseconds. Set
+        DEEPSENTINEL_EMBED_DEVICE if a deployment really wants a GPU and can
+        guarantee one caller at a time.
+        """
         if self._embedder is None:
-            logger.info(f"Loading embedding model: {EMBEDDING_MODEL}")
-            self._embedder = SentenceTransformer(EMBEDDING_MODEL)
+            device = os.getenv("DEEPSENTINEL_EMBED_DEVICE", "cpu")
+            logger.info(f"Loading embedding model: {EMBEDDING_MODEL} on {device}")
+            self._embedder = SentenceTransformer(EMBEDDING_MODEL, device=device)
         return self._embedder
 
     def initialize(self):

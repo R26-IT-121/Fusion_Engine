@@ -168,7 +168,7 @@ async def record_analysis(
     transaction: Optional[dict] = None,
     analysed_by: Optional[str] = None,
     alert_sent: bool = False,
-) -> None:
+) -> Optional[int]:
     """
     Persist one analysis so the run survives the request that produced it.
 
@@ -185,34 +185,37 @@ async def record_analysis(
     try:
         retrieval = payload.get("retrieval") or {}
         async with get_session() as db:
-            db.add(
-                AnalysisRecord(
-                    transaction_id=payload.get("transaction_id", "unknown"),
-                    tx_type=(transaction or {}).get("type"),
-                    amount=(transaction or {}).get("amount"),
-                    name_orig=(transaction or {}).get("nameOrig"),
-                    name_dest=(transaction or {}).get("nameDest"),
-                    step=(transaction or {}).get("step"),
-                    fraud_confidence_score=payload.get("fraud_confidence_score", 0.0),
-                    classification=payload.get("classification", "UNKNOWN"),
-                    modalities_used=payload.get("modalities_used", 0),
-                    graph_score=payload.get("graph_score"),
-                    behavioral_score=payload.get("behavioral_score"),
-                    temporal_score=payload.get("temporal_score"),
-                    graph_available=bool(payload.get("graph_available")),
-                    behavioral_available=bool(payload.get("behavioral_available")),
-                    temporal_available=bool(payload.get("temporal_available")),
-                    typology_id=retrieval.get("typology_id"),
-                    typology_name=retrieval.get("typology_name"),
-                    similarity_score=retrieval.get("similarity_score"),
-                    forensic_report=payload.get("forensic_report"),
-                    alert_sent=alert_sent,
-                    mock_scenario=payload.get("mock_scenario"),
-                    analysed_by=analysed_by,
-                )
+            fields = dict(
+                transaction_id=payload.get("transaction_id", "unknown"),
+                tx_type=(transaction or {}).get("type"),
+                amount=(transaction or {}).get("amount"),
+                name_orig=(transaction or {}).get("nameOrig"),
+                name_dest=(transaction or {}).get("nameDest"),
+                step=(transaction or {}).get("step"),
+                fraud_confidence_score=payload.get("fraud_confidence_score", 0.0),
+                classification=payload.get("classification", "UNKNOWN"),
+                modalities_used=payload.get("modalities_used", 0),
+                graph_score=payload.get("graph_score"),
+                behavioral_score=payload.get("behavioral_score"),
+                temporal_score=payload.get("temporal_score"),
+                graph_available=bool(payload.get("graph_available")),
+                behavioral_available=bool(payload.get("behavioral_available")),
+                temporal_available=bool(payload.get("temporal_available")),
+                typology_id=retrieval.get("typology_id"),
+                typology_name=retrieval.get("typology_name"),
+                similarity_score=retrieval.get("similarity_score"),
+                forensic_report=payload.get("forensic_report"),
+                alert_sent=alert_sent,
+                mock_scenario=payload.get("mock_scenario"),
+                analysed_by=analysed_by,
             )
+            record = AnalysisRecord(**fields)
+            db.add(record)
+            await db.flush()          # populates the primary key
+            return record.id
     except Exception as e:
         logger.error(f"Could not record analysis: {type(e).__name__}: {e}")
+    return None
 
 
 async def list_recent_analyses(limit: int = 50, classification: Optional[str] = None):

@@ -89,6 +89,9 @@ async def run_pipeline(
     transaction_id = request.transaction_id or str(uuid.uuid4())
     mock_scenario_used = None
     behavioral_signal = graph_signal = temporal_signal = None
+    graph_evidence = None
+    behavioral_evidence = None
+    temporal_evidence = None
     fell_back = False  # simulated because upstream was unreachable, not by choice
 
     # ── Stage 1: input ───────────────────────────────────────────────────────
@@ -174,7 +177,10 @@ async def run_pipeline(
 
             behavioral_signal = b_resp.fraud_signal_summary
             graph_signal = g_resp.fraud_signal_summary
+            graph_evidence = g_resp.extra.get("suspicious_subgraph") or None
+            behavioral_evidence = b_resp.extra.get("evidence") or None
             temporal_signal = t_resp.fraud_signal_summary
+            temporal_evidence = t_resp.extra.get("temporal_evidence") or None
 
             if not any([behavioral_available, graph_available, temporal_available]):
                 logger.warning("All upstream APIs unavailable — falling back to mock.")
@@ -274,6 +280,20 @@ async def run_pipeline(
     )
 
     # ── Stage 4: retrieval ───────────────────────────────────────────────────
+    # What the detectors and the transaction itself say about the pattern, so
+    # the typology search is not left with three score levels to go on.
+    retrieval_evidence = {
+        "graph_pattern": (graph_evidence or {}).get("pattern"),
+        "behaviour_hint": (behavioral_evidence or {}).get("fraud_typology", {}).get("typology_label")
+        if isinstance(behavioral_evidence, dict) else None,
+    }
+    if tx is not None:
+        retrieval_evidence.update({
+            "type": tx.type,
+            "amount": tx.amount,
+            "sender_drained": tx.oldbalanceOrg > 0 and tx.newbalanceOrig == 0,
+            "receiver_was_empty": tx.oldbalanceDest == 0,
+        })
     yield StageEvent(Stage.RETRIEVAL, Status.RUNNING, message="Querying the FATF knowledge base")
 
     with _Timer() as t:
@@ -283,6 +303,7 @@ async def run_pipeline(
             behavioral_score=fusion.behavioral_score,
             temporal_score=fusion.temporal_score,
             confidence_score=fusion.confidence_score,
+            evidence=retrieval_evidence,
         )
 
     if not retrievals:
@@ -338,6 +359,7 @@ async def run_pipeline(
                 graph_signal_summary=graph_signal,
                 temporal_signal_summary=temporal_signal,
             ),
+            classification=classification,
         )
 
         with _Timer() as t:
@@ -392,6 +414,11 @@ async def run_pipeline(
             "behavioral_available": fusion.behavioral_available,
             "temporal_available": fusion.temporal_available,
             "modalities_used": fusion.modalities_used,
+            # Each detector's signed contribution to the fused
+            # log-odds. Already computed on every verdict; reporting it
+            # costs nothing and is the only exact answer to "which
+            # detector decided this" that the meta-classifier can give.
+            "contributions": fusion.contributions,
             "retrieval": {
                 "typology_id": top.typology_id,
                 "typology_name": top.typology_name,
@@ -404,6 +431,9 @@ async def run_pipeline(
             "mock_scenario": mock_scenario_used,
             "behavioral_signal": behavioral_signal,
             "graph_signal": graph_signal,
+            "graph_evidence": graph_evidence,
+            "behavioral_evidence": behavioral_evidence,
             "temporal_signal": temporal_signal,
+            "temporal_evidence": temporal_evidence,
         }
     )

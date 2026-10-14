@@ -26,23 +26,46 @@ logger = logging.getLogger(__name__)
 # When these are unset the assistants share the fusion engine's configuration.
 CHATBOT_KEY_ENV = "CHATBOT_GEMINI_API_KEY"
 CHATBOT_MODEL_ENV = "CHATBOT_GEMINI_MODEL"
+# Floating alias, not a pinned version: Google retires numbered models and a
+# pin silently becomes a 404 that shows up as "the bot stopped answering".
+#
+# The *lite* alias, deliberately. gemini-flash-latest currently resolves to a
+# model whose free tier allows 20 requests PER DAY — enough to exhaust during
+# a single demo rehearsal, after which every answer silently degrades. Lite is
+# built for high-volume short-form work, which is exactly what grounded Q&A
+# over a fixed corpus is, and it carries a far larger free allowance.
+DEFAULT_CHATBOT_MODEL = "gemini-flash-lite-latest"
 
 
 class _GeminiBackend:
-    def __init__(self, api_key: str, model: str):
-        import google.generativeai as genai
+    """Gemini via the google-genai SDK.
 
-        genai.configure(api_key=api_key)
-        self._genai = genai
-        self._model = genai.GenerativeModel(model_name=model)
+    Matches backend/llm/forensic_reporter.py: google-generativeai is
+    discontinued and is no longer a project dependency, so importing it here
+    would raise and drop both assistants into extractive mode with no visible
+    error.
+    """
+
+    def __init__(self, api_key: str, model: str):
+        from google import genai
+
+        self._client = genai.Client(api_key=api_key)
         self.model_name = model
 
     def generate(self, package) -> str:
-        resp = self._model.generate_content(
-            f"{package.system_prompt}\n\n{package.user_prompt}",
-            generation_config=self._genai.GenerationConfig(
+        from google.genai import types
+
+        resp = self._client.models.generate_content(
+            model=self.model_name,
+            contents=package.user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=package.system_prompt,
                 temperature=0.2,          # grounded, not creative
-                max_output_tokens=1024,
+                # Gemini 2.5+ spends part of this budget on internal reasoning
+                # before emitting anything, and an overrun returns an EMPTY
+                # body rather than a truncated one — so a chat reply that is
+                # blank rather than short means this was too low.
+                max_output_tokens=4096,
             ),
         )
         return getattr(resp, "text", "") or ""
@@ -94,6 +117,30 @@ def _dedicated_key() -> str:
         return ""
 
 
+def _model_name(dedicated: bool) -> str:
+    """Which Gemini model the assistants should use.
+
+    Explicit setting wins. Otherwise, when the assistants run on their OWN key
+    we do NOT inherit [llm] gemini_model: model availability is per-account,
+    and a newer key is refused access to models an older one still has. That
+    is not hypothetical here — the shared config names gemini-2.5-flash, which
+    returns 404 "no longer available to new users" for the assistant key. A
+    floating alias keeps working as Google retires versions.
+    """
+    explicit = (os.getenv(CHATBOT_MODEL_ENV) or "").strip()
+    if explicit:
+        return explicit
+    try:
+        from_config = str(config.get("llm", "chatbot_gemini_model") or "").strip()
+        if from_config:
+            return from_config
+    except KeyError:
+        pass
+    if dedicated:
+        return DEFAULT_CHATBOT_MODEL
+    return str(config.get("llm", "gemini_model"))
+
+
 def _fallback_backend():
     """Same providers and config keys as the fusion engine's factory."""
     provider = str(config.get("llm", "provider")).lower()
@@ -106,11 +153,7 @@ def _fallback_backend():
                 "assistants specifically, or GEMINI_API_KEY to share the "
                 "fusion engine's key, or switch to [llm] provider = ollama."
             )
-        model = (
-            os.getenv(CHATBOT_MODEL_ENV)
-            or str(config.get("llm", "gemini_model"))
-        )
-        return _GeminiBackend(api_key, model)
+        return _GeminiBackend(api_key, _model_name(dedicated=bool(_dedicated_key())))
 
     if provider == "ollama":
         return _OllamaBackend(

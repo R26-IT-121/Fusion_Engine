@@ -40,6 +40,7 @@ def build_chain_of_evidence_prompt(
     temporal_available: bool,
     retrieval: RetrievalResult,
     upstream_context: Optional[UpstreamContext] = None,
+    classification: Optional[str] = None,
 ) -> ForensicPromptPackage:
     """
     Builds the two-part prompt (system + user) for the LLM forensic analyst.
@@ -123,6 +124,12 @@ MANDATORY CHAIN OF EVIDENCE RULES — you MUST follow all of these without excep
                 + "\n\n".join(signals)
             )
 
+    # The system has already classified this transaction; handing the model the
+    # answer removes a hallucination surface (it cannot disagree with our own
+    # banding) and removes the instruction text it used to echo verbatim into
+    # the finished report — "Classification: LOW — derive from confidence score".
+    classification_line = classification or "[CRITICAL / HIGH / MEDIUM / LOW]"
+
     user_prompt = f"""Generate a forensic case investigation report using ONLY the evidence below.
 
 ══════════════════════════════════════════════════════
@@ -148,7 +155,7 @@ Generate the report in EXACTLY this five-section format:
 ---
 CASE INVESTIGATION REPORT
 Transaction ID: {transaction_id}
-Classification: [CRITICAL / HIGH / MEDIUM / LOW] — derive from confidence score
+Classification: {classification_line}
 FATF Typology Match: [Typology Name] ({retrieval.typology_id}) — {retrieval.similarity_score:.1%} similarity
 
 SECTION 1 — EXECUTIVE SUMMARY
@@ -205,3 +212,147 @@ SECTION 4 — CONFIDENCE ASSESSMENT
 SECTION 5 — INVESTIGATIVE RECOMMENDATION"""
 
     return ForensicPromptPackage(system_prompt=system_prompt, user_prompt=user_prompt)
+
+
+# ── Suspicious Activity Report drafting ──────────────────────────────────────
+
+SAR_SYSTEM_PROMPT = """You are drafting a Suspicious Activity Report (SAR) for review by a human compliance officer.
+
+You are NOT filing anything. You are producing a draft that a named officer will read, edit and decide upon. Write accordingly.
+
+ABSOLUTE CONSTRAINTS
+1. Use ONLY the case data supplied below. Every account identifier, amount, score, date and typology name you write must appear verbatim in that data.
+2. If a field a SAR would normally contain was not supplied, write "Not available in the source record." Do NOT infer it, estimate it, or leave it out silently.
+3. Never invent a customer name, address, account-holder identity, occupation, or any KYC detail. None of that is in the source data.
+4. Do not state that fraud occurred. State what was observed and why it was flagged. The determination is the officer's to make, not yours.
+5. Do not recommend filing or not filing. Present the evidence; the decision is a human judgement.
+6. Attribute every risk score to the model that produced it, and say plainly when a model was unavailable.
+7. Write in plain, factual, non-emotive language suitable for a regulator. No speculation about intent or criminality.
+
+Produce exactly the six sections requested, and nothing else."""
+
+
+def build_sar_prompt(record: dict) -> ForensicPromptPackage:
+    """Draft a SAR from one persisted analysis record.
+
+    Takes the stored record rather than a live pipeline result on purpose: a
+    filing must describe what the system actually concluded at the time, and
+    re-running the models could produce a different answer against a graph that
+    has since moved on.
+
+    `record` is the row from `analysis_records`, so every value here has already
+    been through the pipeline and persisted. Nothing new is computed.
+    """
+    def val(key: str, default: str = "Not available in the source record.") -> str:
+        v = record.get(key)
+        return default if v is None or v == "" else str(v)
+
+    def score_line(name: str, score_key: str, avail_key: str) -> str:
+        if not record.get(avail_key):
+            return f"  {name}: model unavailable for this transaction — excluded from the fused score."
+        s = record.get(score_key)
+        return f"  {name}: {s:.4f}" if isinstance(s, (int, float)) else f"  {name}: {val(score_key)}"
+
+    confidence = record.get("fraud_confidence_score")
+    confidence_str = f"{confidence:.4f}" if isinstance(confidence, (int, float)) else val("fraud_confidence_score")
+
+    amount = record.get("amount")
+    amount_str = f"{amount:,.2f}" if isinstance(amount, (int, float)) else val("amount")
+
+    similarity = record.get("similarity_score")
+    similarity_str = f"{similarity:.1%}" if isinstance(similarity, (int, float)) else val("similarity_score")
+
+    user_prompt = f"""Draft a Suspicious Activity Report from the case data below.
+
+══════════════════════════════════════════════════════
+CASE DATA — the only permitted source of fact
+══════════════════════════════════════════════════════
+Internal reference:   {val('transaction_id')}
+Detected at:          {val('created_at')}
+Screened by:          {val('analysed_by', 'Automated monitoring')}
+
+SUBJECT ACCOUNTS
+  Originating account: {val('name_orig')}
+  Receiving account:   {val('name_dest')}
+
+TRANSACTION
+  Type:   {val('tx_type')}
+  Amount: {amount_str}
+  Period: {val('step')}
+
+MODEL ASSESSMENT
+  Fused confidence: {confidence_str}
+  Classification:   {val('classification')}
+  Modalities contributing: {val('modalities_used')} of 3
+{score_line('Relational (graph network) score', 'graph_score', 'graph_available')}
+{score_line('Behavioural score', 'behavioral_score', 'behavioral_available')}
+{score_line('Temporal score', 'temporal_score', 'temporal_available')}
+
+TYPOLOGY MATCH
+  Name:       {val('typology_name')}
+  Reference:  {val('typology_id')}
+  Similarity: {similarity_str}
+
+SUPPORTING ANALYSIS (produced by the detection system at the time of the alert)
+{val('forensic_report', 'No forensic narrative was recorded for this alert.')}
+══════════════════════════════════════════════════════
+
+Produce exactly these six sections:
+
+SECTION 1 — SUBJECT OF REPORT
+[The accounts involved and their role in the observed activity. Identifiers only — no identity details were supplied and none may be invented.]
+
+SECTION 2 — ACTIVITY OBSERVED
+[What happened, factually: the transaction, amount, type and period. No characterisation of intent.]
+
+SECTION 3 — REASON FOR SUSPICION
+[Why the activity was flagged. Cite each contributing model score and what it measured. Name any model that was unavailable and state that the fused confidence was reduced accordingly.]
+
+SECTION 4 — TYPOLOGY ASSESSMENT
+[The matched typology, its similarity, and which observed features correspond to it. State explicitly that a typology match is a similarity measure and not a determination of criminal conduct.]
+
+SECTION 5 — SUPPORTING EVIDENCE
+[Enumerate the specific evidence relied on, each traceable to the case data above.]
+
+SECTION 6 — MATTERS FOR REVIEWER ATTENTION
+[What a compliance officer must establish before deciding: information absent from this record, KYC checks not performed by this system, and any limitation in the assessment. Be candid about what the system cannot know.]"""
+
+    return ForensicPromptPackage(system_prompt=SAR_SYSTEM_PROMPT, user_prompt=user_prompt)
+
+
+# ── Plain-English restatement ────────────────────────────────────────────────
+
+PLAIN_SYSTEM_PROMPT = """You explain fraud alerts to people who are not analysts — a branch manager, a customer-service lead, a new joiner.
+
+RULES
+1. Use ONLY facts from the report you are given. Add nothing, and do not soften or strengthen the conclusion.
+2. No jargon. If a term is unavoidable, define it in the same sentence.
+3. Never say fraud has occurred. Say what was noticed and why it was unusual.
+4. Say plainly which checks could not run, if the report says any could not.
+5. Six sentences at most, in plain paragraphs. No headings, no bullet lists.
+
+You are restating, not re-analysing."""
+
+
+def build_plain_english_prompt(report: str, classification: str) -> ForensicPromptPackage:
+    """Restate a forensic report for a non-specialist reader.
+
+    A second pass over text the system already produced, rather than a second
+    look at the evidence: the technical report stays the record, and this is a
+    reading of it. That ordering matters — two independent generations from the
+    same evidence could disagree, and then nobody knows which one is the finding.
+    """
+    user_prompt = f"""Restate the following fraud alert for someone with no technical background.
+
+The system classified it as: {classification}
+
+──────────────── REPORT ────────────────
+{report}
+────────────────────────────────────────
+
+Explain, in plain language: what happened, what looked unusual about it, how
+confident the system is, and what a person should do next. If the report says a
+check could not run, say so."""
+    return ForensicPromptPackage(
+        system_prompt=PLAIN_SYSTEM_PROMPT, user_prompt=user_prompt
+    )

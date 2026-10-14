@@ -98,6 +98,24 @@ class PasswordChange(BaseModel):
         return v
 
 
+class ProfileUpdate(BaseModel):
+    """What a user may change about themselves. Username and role are not here:
+    the first is the audit identity, the second is an administrator's call."""
+
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+
+    @field_validator("full_name")
+    @classmethod
+    def _name_ok(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = " ".join(v.split())
+        if not 1 <= len(v) <= 120:
+            raise ValueError("full name must be 1 to 120 characters")
+        return v
+
+
 class UserOut(BaseModel):
     username: str
     email: str
@@ -345,6 +363,40 @@ async def change_password(username: str, current: str, new: str) -> None:
     logger.info(f"Password changed: {username}")
 
 
+async def update_profile(username: str, changes: ProfileUpdate) -> User:
+    """Change a user's own name or email. Email stays unique, ignoring case."""
+    fields = changes.model_dump(exclude_none=True)
+    if not fields:
+        raise HTTPException(status_code=422, detail="Nothing to change")
+
+    async with get_session() as db:
+        user = await db.scalar(select(User).where(User.username == username))
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        if "email" in fields:
+            email = str(fields["email"]).strip()
+            taken = await db.scalar(
+                select(User.id).where(
+                    func.lower(User.email) == email.lower(), User.id != user.id
+                )
+            )
+            if taken is not None:
+                raise HTTPException(
+                    status_code=409, detail="That email is already used by another account"
+                )
+            user.email = email
+        if "full_name" in fields:
+            user.full_name = fields["full_name"]
+        await db.flush()
+        await db.refresh(user)
+
+    await audit(
+        "auth.profile_update", actor=username, target=username,
+        detail=", ".join(sorted(fields)),
+    )
+    return user
+
+
 async def set_user_enabled(username: str, enabled: bool, actor: str) -> None:
     async with get_session() as db:
         user = await db.scalar(select(User).where(User.username == username))
@@ -459,25 +511,86 @@ require_any_user = require_role(UserRole.ADMIN, UserRole.RISK_MANAGER, UserRole.
 # ── Bootstrap ────────────────────────────────────────────────────────────────
 
 
-async def ensure_bootstrap_admin() -> None:
-    """Create the initial admin on an empty user table. Idempotent."""
-    async with get_session() as db:
-        count = await db.scalar(select(func.count()).select_from(User))
-        if count:
-            return
+async def ensure_bootstrap_users() -> None:
+    """
+    Seed the accounts the team needs to sign in on a fresh database.
 
-    password = config.get("secrets", "admin_bootstrap_password")
-    await create_user(
+    Checked one account at a time, not "is the user table empty". The
+    empty-table version had a failure that cost real time: once `admin`
+    existed, every later account was skipped forever, so a database created
+    before the analyst role existed never grew one, and the only symptom was a
+    teammate being told their password was wrong.
+
+    Idempotent per account, so adding a role here backfills it on databases
+    that are already in use, and a password an admin has since changed is never
+    reset from under them.
+    """
+    admin_password = config.get("secrets", "admin_bootstrap_password")
+    team_password = config.get("secrets", "team_bootstrap_password")
+
+    seeds = [
         UserCreate(
             username="admin",
             email="admin@deepsentinel.io",
             full_name="DeepSentinel Admin",
-            password=password,
+            password=admin_password,
             role=UserRole.ADMIN,
         ),
-        created_by="system",
-    )
-    logger.warning(
-        "Bootstrapped the initial admin account. Change its password before "
-        "this instance is reachable by anyone else."
-    )
+    ]
+
+    # The two shared operator accounts are a convenience for a team working off
+    # one database, and a liability anywhere else. Two guards, both needed:
+    # never in production, and never on a default — the password has to be set
+    # deliberately in gitignored config. This repository is public, so a
+    # fallback value here would be a working password in every clone.
+    if not config.is_production() and team_password:
+        seeds += [
+            UserCreate(
+                username="riskmanager",
+                email="riskmanager@deepsentinel.io",
+                full_name="Risk Manager",
+                password=team_password,
+                role=UserRole.RISK_MANAGER,
+            ),
+            UserCreate(
+                username="analyst",
+                email="analyst@deepsentinel.io",
+                full_name="Fraud Analyst",
+                password=team_password,
+                role=UserRole.ANALYST,
+            ),
+        ]
+
+    created = []
+    for seed in seeds:
+        async with get_session() as db:
+            exists = await db.scalar(
+                select(func.count())
+                .select_from(User)
+                .where(
+                    (User.username == seed.username)
+                    | (func.lower(User.email) == seed.email.lower())
+                )
+            )
+        if exists:
+            continue
+        await create_user(seed, created_by="system")
+        created.append(f"{seed.username} ({seed.role.value})")
+
+    if created:
+        logger.warning(
+            "Seeded accounts on this database: %s. Change these passwords "
+            "before this instance is reachable by anyone outside the team.",
+            ", ".join(created),
+        )
+
+    if not team_password and not config.is_production():
+        logger.info(
+            "No team_bootstrap_password set, so the shared riskmanager and "
+            "analyst accounts were not seeded. Set it in config.ini if you "
+            "need them."
+        )
+
+
+# The old name, kept so an out-of-tree caller does not break.
+ensure_bootstrap_admin = ensure_bootstrap_users

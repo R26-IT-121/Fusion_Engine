@@ -31,6 +31,27 @@ def _clamp(v: float) -> float:
     return max(0.0, min(1.0, v))
 
 
+def behavioural_evidence(data: dict) -> dict:
+    """The behavioural detector's forensic decomposition, in one shape.
+
+    Two callers need it and they have to agree: the analyzer renders it live
+    from /analyze, and the monitor stores it on the case a reviewer opens
+    afterwards. Written out twice it would drift, and the drift would surface
+    only as a panel that fills from one path and stays empty from the other.
+    """
+    diagnostics = data.get("vae_diagnostics", {}) or {}
+    return {
+        "risk_level": data.get("risk_level"),
+        "transaction_type": data.get("transaction_type"),
+        "feature_set": data.get("feature_set"),
+        "model_version": data.get("model_version"),
+        "vae_diagnostics": diagnostics,
+        "fingerprint": data.get("anomaly_fingerprint", {}) or {},
+        "fraud_typology": data.get("fraud_typology", {}) or {},
+        "metadata": data.get("metadata", {}) or {},
+    }
+
+
 # ── Member 1: Wijesinghe — VAE/DSAA ──────────────────────────────────────────
 
 async def call_behavioral_api(
@@ -58,7 +79,18 @@ async def call_behavioral_api(
         resp.raise_for_status()
         data = resp.json()
 
-        score = _clamp(float(data.get("behavioral_risk_score", 0.5)))
+        # A 200 response without "behavioral_risk_score" is a contract
+        # violation, not a measurement of 0.5. Defaulting here would report
+        # available=True with a placeholder — removing the very uncertainty
+        # penalty that exists to flag a missing modality.
+        raw = data.get("behavioral_risk_score")
+        if raw is None:
+            logger.error(
+                "Behavioural API returned 200 without 'behavioral_risk_score'. "
+                "Keys present: %s. Treating as unavailable.", sorted(data)[:12]
+            )
+            return UpstreamResponse(score=0.5, available=False)
+        score = _clamp(float(raw))
 
         # Extract M1's rich forensic signals for LLM prompt enrichment
         evidence = data.get("evidence", {})
@@ -73,19 +105,30 @@ async def call_behavioral_api(
 
         typology_hint = data.get("fraud_typology", {}).get("typology_label")
 
+        diagnostics = data.get("vae_diagnostics", {}) or {}
+
         return UpstreamResponse(
             score=score,
             available=True,
             fraud_signal_summary=fraud_signal_summary,
             typology_hint=typology_hint,
             extra={
+                # Unchanged — the two headline strings and the score.
                 "anomaly_fingerprint": {
                     "dominant_reconstruction_signal": dominant_reconstruction,
                     "dominant_kl_signal": dominant_kl,
                 },
-                "vae_diagnostics": data.get("vae_diagnostics", {}),
+                "vae_diagnostics": diagnostics,
                 "transaction_type": data.get("transaction_type"),
-                "combined_anomaly_score": data.get("vae_diagnostics", {}).get("combined_anomaly_score"),
+                "combined_anomaly_score": diagnostics.get("combined_anomaly_score"),
+
+                # Full forensic payload for the evidence panel. This detector's
+                # evidence is a decomposition rather than a structure: which
+                # stratum model answered, how the three score terms combined,
+                # the per-feature and per-latent-dimension attribution shares,
+                # and which discovered typology the fingerprint matched. Kept
+                # under one key so nothing above changes shape.
+                "evidence": behavioural_evidence(data),
             },
         )
     except Exception as e:
@@ -135,7 +178,18 @@ async def call_graph_api(
             logger.debug(f"Graph API: NOT_APPLICABLE for transaction {transaction.get('transaction_id', '?')}")
             return UpstreamResponse(score=0.5, available=False)
 
-        score = _clamp(float(data.get("relational_risk_score", 0.5)))
+        # A 200 response without "relational_risk_score" is a contract
+        # violation, not a measurement of 0.5. Defaulting here would report
+        # available=True with a placeholder — removing the very uncertainty
+        # penalty that exists to flag a missing modality.
+        raw = data.get("relational_risk_score")
+        if raw is None:
+            logger.error(
+                "Graph API returned 200 without 'relational_risk_score'. "
+                "Keys present: %s. Treating as unavailable.", sorted(data)[:12]
+            )
+            return UpstreamResponse(score=0.5, available=False)
+        score = _clamp(float(raw))
 
         subgraph = data.get("suspicious_subgraph") or {}
         pattern = subgraph.get("pattern", "UNKNOWN") if subgraph else "UNKNOWN"
@@ -184,10 +238,22 @@ async def call_temporal_api(
     timeout: float,
 ) -> UpstreamResponse:
     """
-    POST /api/v1/classify
-    Response key: temporal_risk_score
-    Transaction ID: transaction_ref.composite_id = "{nameOrig}_{step}"
-    Key fields: step_burstiness (Goh-Barabasi B coefficient), triggering_predecessor
+    POST /api/v1/classify — per TS-TCN/docs/api_contract.md (authoritative
+    2026-08-25 revision, aligned against this adapter).
+
+    Request:  flat transaction + composite_id "{nameOrig}_{step}"
+    Response: temporal_risk_score, step_burstiness, triggering_predecessor{...},
+              evidence.current_transaction.fraud_signal_summary
+
+    The service keeps its own deque(maxlen=32) of predecessor feature vectors
+    and answers 503 WARMING_UP while fewer than 32 have arrived. It appends
+    before it checks, so calls 1-31 warm up and the 32nd is the first real
+    classification. That is a normal startup state, not an outage, so it is
+    reported as unavailable without logging a failure.
+
+    The buffer is in-process and starts empty on every restart, so a replay of
+    fewer than 32 transactions never gets an answer from this detector. Check
+    GET /api/v1/runtime — it reports buffer_filled and warming_up directly.
     """
     try:
         name_orig = transaction.get("nameOrig", "")
@@ -199,21 +265,38 @@ async def call_temporal_api(
             json=payload,
             timeout=timeout,
         )
+
+        # Warming up: the model is fine, it just has no window yet.
+        if resp.status_code == 503:
+            logger.info("Temporal API: warming up (buffer below 32 transactions)")
+            return UpstreamResponse(score=0.5, available=False)
+
         resp.raise_for_status()
         data = resp.json()
 
-        score = _clamp(float(data.get("temporal_risk_score", 0.5)))
+        # A 200 response without "temporal_risk_score" is a contract
+        # violation, not a measurement of 0.5. Defaulting here would report
+        # available=True with a placeholder — removing the very uncertainty
+        # penalty that exists to flag a missing modality.
+        raw = data.get("temporal_risk_score")
+        if raw is None:
+            logger.error(
+                "Temporal API returned 200 without 'temporal_risk_score'. "
+                "Keys present: %s. Treating as unavailable.", sorted(data)[:12]
+            )
+            return UpstreamResponse(score=0.5, available=False)
+        score = _clamp(float(raw))
 
         evidence = data.get("evidence", {})
         current_tx = evidence.get("current_transaction", {})
         fraud_signal_summary = current_tx.get("fraud_signal_summary")
 
         step_burstiness = data.get("step_burstiness")
-        predecessor = data.get("triggering_predecessor", {})
+        predecessor = data.get("triggering_predecessor") or {}
         attention_weight = predecessor.get("attention_weight")
         predecessor_signal = predecessor.get("predecessor_signal")
 
-        # Build summary if not provided by API
+        # Build a summary when the service did not supply one.
         if not fraud_signal_summary and step_burstiness is not None:
             parts = [f"Step burstiness coefficient: {step_burstiness:.4f}."]
             if predecessor_signal:
@@ -226,11 +309,30 @@ async def call_temporal_api(
             fraud_signal_summary=fraud_signal_summary,
             typology_hint=None,
             extra={
+                "composite_id": data.get("transaction_ref", {}).get("composite_id")
+                or data.get("composite_id"),
+                "risk_level": data.get("risk_level"),
                 "step_burstiness": step_burstiness,
                 "triggering_predecessor": predecessor,
                 "attention_weight": attention_weight,
                 "flagging_miss_rate": data.get("flagging_miss_rate"),
                 "detection_method": data.get("detection_method"),
+                "model_version": data.get("model_version"),
+                "inference_time_ms": data.get("inference_time_ms"),
+
+                # Full forensic payload for the evidence panel — the sequential
+                # analogue of graph's suspicious_subgraph and behavioral's
+                # evidence dict. Current-transaction feature values (not just
+                # the one-line summary) plus the predecessor block, so the
+                # panel can show what fraud_attention actually weighed.
+                "temporal_evidence": {
+                    "risk_level": data.get("risk_level"),
+                    "detection_method": data.get("detection_method"),
+                    "model_version": data.get("model_version"),
+                    "inference_time_ms": data.get("inference_time_ms"),
+                    "current_transaction": current_tx,
+                    "triggering_predecessor": predecessor or None,
+                },
             },
         )
     except Exception as e:

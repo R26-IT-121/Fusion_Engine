@@ -26,7 +26,26 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-CONFIG_FILE = Path(os.getenv("DEEPSENTINEL_CONFIG", "./config.ini"))
+# Anchored to the service directory, not the working directory.
+#
+# This was "./config.ini", which configparser resolves against wherever the
+# process happens to have been started from — and configparser.read() ignores
+# a file it cannot find rather than raising. Started from any other directory,
+# the service therefore came up silently on *defaults*: SQLite instead of the
+# team's Postgres, no SMTP credentials, no API keys — with nothing in the log
+# to say so beyond one warning that is easy to miss. That is a bad failure for
+# something deployed in a container, where the working directory is whatever
+# the image says it is.
+#
+# DEEPSENTINEL_CONFIG still overrides, and is resolved from the cwd if given
+# as a relative path, because that is an explicit choice by whoever set it.
+_SERVICE_ROOT = Path(__file__).resolve().parent.parent
+
+CONFIG_FILE = (
+    Path(os.environ["DEEPSENTINEL_CONFIG"])
+    if os.getenv("DEEPSENTINEL_CONFIG")
+    else _SERVICE_ROOT / "config.ini"
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +80,10 @@ SETTINGS: tuple[Setting, ...] = (
             description="User database (contains password hashes)"),
     Setting("paths", "runtime_settings", "SETTINGS_FILE", "./settings.json",
             description="Risk-manager and alert configuration written at runtime"),
+    Setting("paths", "run_logs", "RUN_LOGS_PATH", "./logs",
+            description="Where the dated per-component run logs are written. "
+                        "One folder per day, five inside it: pipeline, graph, "
+                        "behaviour, timing, fusion"),
 
     # --- upstream model APIs ---
     Setting("upstream", "behavioral_api_base", "BEHAVIORAL_API_BASE", "http://localhost:8001",
@@ -69,6 +92,8 @@ SETTINGS: tuple[Setting, ...] = (
             description="M2 Ewaduge — Edge-Enhanced GraphSAGE"),
     Setting("upstream", "temporal_api_base", "TEMPORAL_API_BASE", "http://localhost:8003",
             description="M3 Pathirana — TCN/TSCFD"),
+    Setting("upstream", "console_url", "CONSOLE_URL", "http://localhost:5173",
+            description="Where the operator console is served; alert emails link to it"),
     Setting("upstream", "timeout_ms", "UPSTREAM_TIMEOUT_MS", 5000, cast=int,
             description="Per-call timeout for upstream model inference"),
 
@@ -119,12 +144,20 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("secrets", "admin_bootstrap_password", "ADMIN_BOOTSTRAP_PASSWORD", "admin123",
             secret=True,
             description="Password for the admin account created on first run"),
+    Setting("secrets", "team_bootstrap_password", "TEAM_BOOTSTRAP_PASSWORD", "",
+            secret=True,
+            description="Password for the shared riskmanager and analyst accounts. "
+                        "Blank by default and deliberately so: this repository is "
+                        "public, and a default here would be a working password in "
+                        "every clone. Set it in config.ini to seed those accounts; "
+                        "they are never seeded in production regardless"),
     Setting("secrets", "gemini_api_key", "GEMINI_API_KEY", "", secret=True,
             description="Google AI Studio API key"),
-    Setting("secrets", "chatbot_gemini_api_key", "CHATBOT_GEMINI_API_KEY", "", secret=True,
-            description="Separate key for the chatbots, so their traffic does not "
-                        "consume the quota the forensic reports need. Falls back "
-                        "to gemini_api_key when unset"),
+    Setting("secrets", "chatbot_gemini_api_key", "CHATBOT_GEMINI_API_KEY", "",
+            secret=True,
+            description="Separate key for the assistants, so their traffic does "
+                        "not consume the quota the forensic reports depend on. "
+                        "Falls back to gemini_api_key when unset."),
     Setting("secrets", "sendgrid_api_key", "SENDGRID_API_KEY", "", secret=True,
             description="SendGrid API key for fraud alert email"),
     Setting("secrets", "smtp_username", "SMTP_USERNAME", "", secret=True,
@@ -148,10 +181,18 @@ def _load_parser() -> configparser.ConfigParser:
     if CONFIG_FILE.exists():
         parser.read(CONFIG_FILE, encoding="utf-8")
         logger.info(f"Loaded configuration from {CONFIG_FILE}")
+    elif os.getenv("DEEPSENTINEL_CONFIG"):
+        # Explicitly pointed at a file that is not there. Never quietly fall
+        # back — someone naming a config file means to use it.
+        raise FileNotFoundError(
+            f"DEEPSENTINEL_CONFIG points at {CONFIG_FILE}, which does not exist."
+        )
     else:
         logger.warning(
             f"{CONFIG_FILE} not found — using environment variables and defaults. "
-            f"Copy config.example.ini to config.ini to customise."
+            f"Every secret and the database URL will fall back to their built-in "
+            f"values, which means SQLite and no credentials. Copy "
+            f"config.example.ini to config.ini to customise."
         )
     _parser = parser
     return parser

@@ -462,3 +462,114 @@ def _build_email_html_impl(alert: FraudAlert, backend_url: str) -> str:
     </body>
     </html>
     """
+
+
+def _send_rich(
+    subject: str,
+    text_body: str,
+    html_body: str,
+    recipients: list[str],
+    inline_images: dict[str, bytes] | None = None,
+    attachments: list[tuple[str, str, str, bytes]] | None = None,
+) -> bool:
+    """Send a multipart message: text fallback, HTML, inline images, files.
+
+    `inline_images` maps a Content-ID to PNG bytes; the HTML refers to them as
+    `cid:<key>`. Remote images are blocked by default in most inboxes, so an
+    embedded one is the only kind that shows up without the reader opting in.
+
+    `attachments` are `(maintype, subtype, filename, data)`.
+
+    Separate from `_send_plain` because that one is for operational mail where
+    the text is the content, and separate from `send_fraud_alert` because that
+    builds its own alert-shaped template from a FraudAlert object. This one
+    takes a body someone else has already composed.
+    """
+    provider, s_cfg = _provider()
+    if provider != "smtp" or not recipients:
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = f"{SENDER_NAME} <{s_cfg['username']}>"
+    message["To"] = ", ".join(recipients)
+    message.set_content(text_body)
+    message.add_alternative(html_body, subtype="html")
+
+    # The image has to be related to the HTML part specifically, not to the
+    # message — attached at the top level it arrives as a download rather than
+    # rendering where the <img> sits.
+    if inline_images:
+        html_part = message.get_payload()[-1]
+        for cid, data in inline_images.items():
+            # Sniff the format rather than declaring PNG for everything. The
+            # subgraph diagram is a PNG, but the severity banners are JPEG, and
+            # a JPEG served as image/png renders as a broken box in some
+            # clients and is silently dropped by others.
+            subtype = "jpeg" if data[:3] == b"\xff\xd8\xff" else "png"
+            html_part.add_related(data, maintype="image", subtype=subtype,
+                                  cid=f"<{cid}>")
+
+    for maintype, subtype, filename, data in (attachments or []):
+        message.add_attachment(data, maintype=maintype, subtype=subtype,
+                               filename=filename)
+
+    try:
+        context = ssl.create_default_context()
+        if int(s_cfg["port"]) == 465:
+            with smtplib.SMTP_SSL(
+                s_cfg["host"], int(s_cfg["port"]), context=context, timeout=30
+            ) as srv:
+                srv.login(s_cfg["username"], s_cfg["password"])
+                srv.send_message(message)
+        else:
+            with smtplib.SMTP(s_cfg["host"], int(s_cfg["port"]), timeout=30) as srv:
+                if s_cfg.get("use_tls"):
+                    srv.starttls(context=context)
+                srv.login(s_cfg["username"], s_cfg["password"])
+                srv.send_message(message)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Rich email send failed: {exc}")
+        return False
+
+
+def _send_plain(
+    subject: str, body: str, recipients: list[str], reply_to: str | None = None
+) -> bool:
+    """Send a plain-text message through whichever provider is configured.
+
+    Separate from send_fraud_alert because that one builds an alert-shaped
+    HTML template; this is for operational mail such as enquiries, where the
+    text IS the content and a Reply-To matters more than styling.
+    """
+    provider, s_cfg = _provider()
+    if provider != "smtp" or not recipients:
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = f"{SENDER_NAME} <{s_cfg['username']}>"
+    message["To"] = ", ".join(recipients)
+    if reply_to:
+        message["Reply-To"] = reply_to
+    message.set_content(body)
+
+    try:
+        context = ssl.create_default_context()
+        if int(s_cfg["port"]) == 465:
+            with smtplib.SMTP_SSL(
+                s_cfg["host"], int(s_cfg["port"]), context=context, timeout=20
+            ) as srv:
+                srv.login(s_cfg["username"], s_cfg["password"])
+                srv.send_message(message)
+        else:
+            with smtplib.SMTP(s_cfg["host"], int(s_cfg["port"]), timeout=20) as srv:
+                if s_cfg.get("use_tls"):
+                    srv.starttls(context=context)
+                srv.login(s_cfg["username"], s_cfg["password"])
+                srv.send_message(message)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Plain email send failed: {exc}")
+        return False

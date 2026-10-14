@@ -18,17 +18,19 @@ from pathlib import Path
 
 # Documentation worth answering from, relative to the repo root. Ordered by
 # authority: when two documents disagree, the earlier one wins (see PRIORITY).
-INCLUDE_GLOBS = [
-    "README.md",
-    "GraphSage/README.md",
-    "GraphSage/docs/*.md",
-    "GraphSage/docs/integration/*.md",
-    "GraphSage/reports/*.md",
-    "fusion_engine/DeepSentinel/*.md",
-    "TS-TCN/README.md",
-    "TS-TCN/docs/*.md",
-    "VAE-With-DSAA/**/*.md",
-]
+# Documentation lives in different places depending on how the project is
+# checked out: the monorepo has every component side by side, while the fusion
+# engine is also published as a standalone repository with only its own docs.
+# Path-shaped globs silently matched nothing in the standalone layout and the
+# assistant answered every question with "not in the documentation", so
+# discovery walks whatever roots it is given instead of assuming a shape.
+SKIP_DIRS = {
+    ".git", ".venv", "node_modules", "__pycache__", ".pytest_cache",
+    "dist", "build", "site-packages", ".qodo", "chroma_store",
+    "chroma_store_test", ".ipynb_checkpoints",
+}
+MAX_DOCS = 400          # a runaway checkout should not blow up startup
+DOCS_ROOT_ENV = "CHATBOT_DOCS_ROOT"   # os.pathsep-separated override
 
 # Documents superseded by later work. Still indexed (someone may ask about the
 # PP1 presentation) but down-weighted so current sources win by default.
@@ -111,22 +113,70 @@ def _pack(heading: str, body: str, source: str, stale: bool) -> list[Chunk]:
     return [c for c in chunks if len(c.text) >= MIN_CHUNK_CHARS]
 
 
-def build_corpus(repo_root: str | Path) -> list[Chunk]:
-    """Discover, split and tokenise every indexed document."""
-    repo_root = Path(repo_root)
+def discover_roots(start: Path | None = None) -> list[Path]:
+    """Where to look for documentation, most authoritative first.
+
+    An explicit override wins. Otherwise we take the monorepo root when the
+    components sit side by side, and always include the package's own
+    repository so the assistant has something to say in any layout.
+    """
+    import os
+
+    override = os.getenv(DOCS_ROOT_ENV, "").strip()
+    if override:
+        roots = [Path(p).expanduser() for p in override.split(os.pathsep) if p.strip()]
+        return [r for r in roots if r.is_dir()]
+
+    here = (start or Path(__file__)).resolve()
+    roots: list[Path] = []
+
+    for parent in here.parents:
+        siblings = {c.name for c in parent.iterdir() if c.is_dir()} if parent.is_dir() else set()
+        # Monorepo: components checked out together.
+        if "GraphSage" in siblings and ("fusion_engine" in siblings or "TS-TCN" in siblings):
+            roots.append(parent)
+            break
+        # Standalone repo root, identified by its own project manifest.
+        if (parent / "pyproject.toml").exists() and parent not in roots:
+            roots.append(parent)
+
+    if not roots:
+        roots.append(here.parents[1])
+    return roots
+
+
+def build_corpus(repo_root: str | Path | list | None = None) -> list[Chunk]:
+    """Discover, split and tokenise every markdown document under the roots."""
+    if repo_root is None:
+        roots = discover_roots()
+    elif isinstance(repo_root, (list, tuple)):
+        roots = [Path(r) for r in repo_root]
+    else:
+        roots = [Path(repo_root)]
+
     seen: set[Path] = set()
     corpus: list[Chunk] = []
 
-    for pattern in INCLUDE_GLOBS:
-        for path in sorted(repo_root.glob(pattern)):
-            if not path.is_file() or path in seen:
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.md")):
+            if len(seen) >= MAX_DOCS:
+                break
+            if any(part in SKIP_DIRS for part in path.parts):
                 continue
-            seen.add(path)
+            resolved = path.resolve()
+            if resolved in seen or not path.is_file():
+                continue
+            seen.add(resolved)
             try:
                 text = path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            rel = str(path.relative_to(repo_root))
+            try:
+                rel = str(path.relative_to(root))
+            except ValueError:
+                rel = path.name
             stale = any(marker in text[:4000] for marker in STALE_MARKERS)
             for heading, body in _split_markdown(text):
                 for chunk in _pack(heading, body, rel, stale):

@@ -159,10 +159,16 @@ async def _model_scores(**kwargs) -> dict:
             out["scores"][name] = {"available": False,
                                    "error": f"{type(res).__name__}: {res}"}
             continue
+        # Read UpstreamResponse's real fields. The previous version asked for
+        # `ok` and `error`, which that dataclass does not define, so getattr
+        # fell through to its default and every model — including one that had
+        # answered "I have no opinion" — was reported as available with a 0.5
+        # placeholder. A detector that did not answer must never be presented
+        # as one that did.
         out["scores"][name] = {
-            "available": getattr(res, "ok", None) is not False,
-            "score": getattr(res, "score", None),
-            "detail": getattr(res, "error", None),
+            "available": bool(res.available),
+            "score": (round(float(res.score), 4) if res.available else None),
+            "detail": res.fraud_signal_summary,
         }
     available = sum(1 for v in out["scores"].values() if v.get("available"))
     out["modalities_available"] = available
@@ -240,6 +246,48 @@ async def _system_status(**_) -> dict:
     return {"upstream": dict(zip(names, results))}
 
 
+async def _live_activity(**kwargs) -> dict:
+    """What the monitor is seeing right now.
+
+    This is the difference between an assistant that can describe the platform
+    and one an analyst can actually use during an incident: it answers "what is
+    happening" from live state, not documentation.
+    """
+    try:
+        from monitor.state import STATE
+    except Exception as exc:                           # noqa: BLE001
+        return {"error": f"Monitor unavailable: {type(exc).__name__}: {exc}"}
+
+    limit = min(int(kwargs.get("limit", 8) or 8), 25)
+    severity = (kwargs.get("severity") or "").upper()
+
+    snap = STATE.snapshot(events=40)
+    alerts = snap["alerts"]
+    if severity in {"MEDIUM", "HIGH", "CRITICAL"}:
+        alerts = [a for a in alerts if a.get("severity") == severity]
+
+    # Recent escalations explain WHY the counters moved, which is usually the
+    # real question behind "what is going on".
+    escalations = [
+        e for e in snap["events"] if e.get("kind") == "escalated"
+    ][-limit:]
+
+    return {
+        "running": snap["running"],
+        "counters": snap["counters"],
+        "stages": snap["stages"],
+        "open_alerts": alerts[:limit],
+        "recent_escalations": escalations,
+        "note": (
+            "Counters are since the monitor last started. An alert is a fused "
+            "verdict at MEDIUM or above. An escalation is the graph model "
+            "tripping its watch threshold — an early relational flag that "
+            "goes out ahead of the verdict, not a gate: all three detectors "
+            "score every transaction."
+        ),
+    }
+
+
 async def _search_docs(**kwargs) -> dict:
     """Look something up in the project documentation (shared with the public bot)."""
     query = str(kwargs.get("query", "")).strip()
@@ -271,6 +319,99 @@ _TXN_SCHEMA = {
     "oldbalanceDest": "float, optional",
     "newbalanceDest": "float, optional",
 }
+
+async def _search_cases(**kwargs) -> dict:
+    """Find recorded cases matching plain-language criteria.
+
+    The agent turns a question into these parameters; this builds a
+    parameterised query from them. It never executes agent-authored SQL — the
+    filters are a fixed, typed set, so a prompt injection can at worst ask for a
+    different slice of the same table.
+    """
+    from sqlalchemy import text as sql_text
+
+    from backend.db.session import get_session
+
+    where, params = ["1=1"], {}
+
+    sev = (kwargs.get("severity") or "").upper().strip()
+    if sev in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+        where.append("classification = :sev")
+        params["sev"] = sev
+
+    for key, col, op in (("min_score", "fused_score", ">="),
+                         ("max_score", "fused_score", "<=")):
+        if kwargs.get(key) is not None:
+            try:
+                params[key] = float(kwargs[key])
+                where.append(f"{col} {op} :{key}")
+            except (TypeError, ValueError):
+                pass
+
+    pattern = (kwargs.get("pattern") or "").upper().strip()
+    if pattern:
+        where.append("graph_pattern = :pattern")
+        params["pattern"] = pattern
+
+    account = (kwargs.get("account") or "").strip()
+    if account:
+        where.append("(sink_account = :acct OR transaction_id = :acct)")
+        params["acct"] = account
+
+    days = kwargs.get("days")
+    if days is not None:
+        try:
+            from datetime import datetime, timedelta, timezone
+            params["cutoff"] = datetime.now(timezone.utc) - timedelta(days=int(days))
+            where.append("detected_at >= :cutoff")
+        except (TypeError, ValueError):
+            pass
+
+    review = (kwargs.get("review_status") or "").lower().strip()
+    if review in {"open", "investigating", "confirmed_fraud", "false_positive", "closed"}:
+        where.append("review_status = :rev")
+        params["rev"] = review
+
+    limit = max(1, min(int(kwargs.get("limit") or 10), 50))
+    params["lim"] = limit
+
+    try:
+        async with get_session() as db:
+            rows = (await db.execute(
+                sql_text(
+                    "SELECT case_ref, transaction_id, detected_at, classification, "
+                    "fused_score, modalities_used, typology_name, graph_pattern, "
+                    "sink_account, review_status, label_is_fraud FROM fraud_cases "
+                    f"WHERE {' AND '.join(where)} "
+                    "ORDER BY fused_score DESC, detected_at DESC LIMIT :lim"
+                ),
+                params,
+            )).all()
+    except Exception as exc:                                  # noqa: BLE001
+        return {
+            "error": f"{type(exc).__name__}",
+            "note": "The fraud_cases table is not available in this database.",
+        }
+
+    cases = [
+        {
+            "case_ref": r[0], "transaction_id": r[1], "detected_at": str(r[2]),
+            "classification": r[3], "fused_score": r[4],
+            "modalities_used": r[5], "typology": r[6], "pattern": r[7],
+            "sink_account": r[8], "review_status": r[9],
+            "confirmed_label": r[10],
+        }
+        for r in rows
+    ]
+    out = {"matched": len(cases), "filters_applied": {k: v for k, v in params.items() if k != "lim"},
+           "cases": cases}
+    if not cases:
+        out["note"] = (
+            "Nothing matched. Either no case fits those criteria, or the monitor "
+            "has not recorded any cases yet."
+        )
+    return out
+
 
 TOOLS: dict[str, Tool] = {
     t.name: t
@@ -323,6 +464,42 @@ TOOLS: dict[str, Tool] = {
             ),
             parameters={},
             run=_system_status,
+        ),
+        Tool(
+            name="get_live_activity",
+            description=(
+                "What the live monitor is seeing RIGHT NOW: how many "
+                "transactions have been screened, what escalated, which "
+                "alerts are open and at what severity, and which detectors "
+                "are currently running. Use for 'what is happening', 'why did "
+                "I get an alert', 'anything critical', 'is the monitor busy'."
+            ),
+            parameters={
+                "severity": "optional MEDIUM | HIGH | CRITICAL filter",
+                "limit": "optional int, default 8, max 25",
+            },
+            run=_live_activity,
+        ),
+        Tool(
+            name="search_cases",
+            description=(
+                "Search recorded fraud cases by severity, score, pattern, account, "
+                "review status or recency. Use for questions like 'show me "
+                "hub-and-spoke cases over 0.8 this week', 'what is still open', "
+                "'any critical cases involving account C123', 'what did we catch "
+                "yesterday'."
+            ),
+            parameters={
+                "severity": "optional LOW | MEDIUM | HIGH | CRITICAL",
+                "min_score": "optional float 0-1",
+                "max_score": "optional float 0-1",
+                "pattern": "optional HUB_AND_SPOKE | SMURFING | LAYERING | ACCOUNT_TAKEOVER",
+                "account": "optional account id or transaction id",
+                "days": "optional int, how many days back",
+                "review_status": "optional open | investigating | confirmed_fraud | false_positive | closed",
+                "limit": "optional int, default 10, max 50",
+            },
+            run=_search_cases,
         ),
         Tool(
             name="search_documentation",

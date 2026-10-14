@@ -87,8 +87,10 @@ class ChatService:
     """Owns the corpus and index. Construct once at application startup."""
 
     def __init__(self, repo_root: str | Path | None = None, top_k: int = 5):
-        self.repo_root = Path(repo_root or _find_repo_root())
-        self.corpus = build_corpus(self.repo_root)
+        # None lets knowledge.discover_roots() find every documentation root
+        # for this checkout, rather than assuming one repository shape.
+        self.corpus = build_corpus(repo_root)
+        self.repo_root = Path(repo_root) if repo_root else _find_repo_root()
         self.retriever = Retriever(self.corpus)
         self.top_k = top_k
         self._model = None
@@ -161,6 +163,17 @@ class ChatService:
                 return Answer(text, sources, True, True)
         except Exception as exc:                      # noqa: BLE001
             self._model_error = f"{type(exc).__name__}: {exc}"
+            # Quota exhaustion is not a corpus problem, and silently switching
+            # to quoted passages hides it — the operator needs to know the key
+            # is spent, not wonder why answers suddenly got worse.
+            if "RESOURCE_EXHAUSTED" in str(exc) or "429" in str(exc):
+                return Answer(
+                    "The language model's request quota is exhausted, so I am "
+                    "quoting the documentation directly instead of summarising "
+                    "it. It usually resets within a minute, or after a day on "
+                    "the free tier.\n\n" + self._extractive(hits),
+                    sources, False, True,
+                )
         # Generation failed — still answer from the retrieved passages.
         return Answer(self._extractive(hits), sources, False, True)
 
@@ -177,9 +190,8 @@ class ChatService:
 
 
 def _find_repo_root() -> Path:
-    """Walk up until the monorepo root (the folder holding the components)."""
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / "GraphSage").is_dir() and (parent / "fusion_engine").is_dir():
-            return parent
-    return here.parents[2]
+    """Kept for compatibility; discovery now lives in knowledge.discover_roots."""
+    from chatbot.knowledge import discover_roots
+
+    roots = discover_roots()
+    return roots[0] if roots else Path(__file__).resolve().parents[1]

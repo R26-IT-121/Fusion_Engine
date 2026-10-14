@@ -53,7 +53,7 @@ services:
       - key: LLM_PROVIDER
         value: gemini
       - key: GEMINI_MODEL
-        value: gemini-2.0-flash
+        value: gemini-flash-latest
       - key: GEMINI_API_KEY
         sync: false
 

@@ -65,6 +65,14 @@ from chatbot import router as chatbot_router  # noqa: E402
 app.include_router(chatbot_router)
 app.include_router(assistant_router)
 
+from enquiry import router as enquiry_router  # noqa: E402
+
+app.include_router(enquiry_router)
+
+from monitor import router as monitor_router  # noqa: E402
+
+app.include_router(monitor_router)
+
 
 # The real app defines auth inline in backend/main.py rather than as a router,
 # so the two endpoints the web client needs to sign in are re-declared here
@@ -102,6 +110,153 @@ async def me(user: User = Depends(get_current_user)):
 @app.post("/auth/logout", tags=["auth"])
 async def logout(_: User = Depends(get_current_user)) -> dict:
     return {"status": "logged_out"}
+
+
+# ── Settings ────────────────────────────────────────────────────────────────
+# The real app defines these inline in backend/main.py. Re-declared here over
+# the same backend.settings functions so the Settings page works in the dev
+# app — without them the page 404s and the recipient form silently fails.
+
+from pydantic import BaseModel, EmailStr  # noqa: E402
+
+
+class RiskManagerRequest(BaseModel):
+    name: str
+    email: EmailStr
+    role: str = "Risk Manager"
+
+
+@app.get("/settings", tags=["settings"])
+async def get_settings(_: User = Depends(get_current_user)) -> dict:
+    from backend.settings import get_alert_settings, list_risk_managers
+
+    managers = await list_risk_managers()
+    alerts = await get_alert_settings()
+    return {
+        "risk_managers": [
+            {"name": m.name, "email": m.email, "role": m.role, "enabled": m.enabled}
+            for m in managers
+        ],
+        "alert_settings": {
+            "fraud_threshold": alerts.fraud_threshold,
+            "include_low_risk": alerts.include_low_risk,
+            "include_medium_risk": alerts.include_medium_risk,
+            "include_high_risk": alerts.include_high_risk,
+            "include_critical_risk": alerts.include_critical_risk,
+            "send_to_all": alerts.send_to_all,
+        },
+        "backend_url": alerts.backend_url,
+    }
+
+
+@app.post("/settings/risk-manager", status_code=201, tags=["settings"])
+async def add_risk_manager_endpoint(
+    req: RiskManagerRequest, user: User = Depends(get_current_user)
+) -> dict:
+    from backend.settings import add_risk_manager
+
+    manager = await add_risk_manager(name=req.name, email=req.email, role=req.role)
+    return {"status": "added", "email": manager.email}
+
+
+@app.delete("/settings/risk-manager/{email}", tags=["settings"])
+async def remove_risk_manager_endpoint(
+    email: str, user: User = Depends(get_current_user)
+) -> dict:
+    from backend.settings import remove_risk_manager
+
+    await remove_risk_manager(email)
+    return {"status": "removed", "email": email}
+
+
+@app.post("/settings/alert-settings", tags=["settings"])
+async def update_alert_settings_endpoint(
+    settings: dict, user: User = Depends(get_current_user)
+) -> dict:
+    from backend.settings import update_alert_settings
+
+    updated = await update_alert_settings(settings, actor=user.username)
+    return {"status": "updated", "fraud_threshold": updated.fraud_threshold}
+
+
+@app.post("/email/send-test", tags=["email"])
+async def send_test_email(
+    req: RiskManagerRequest, _: User = Depends(get_current_user)
+) -> dict:
+    """Send a sample alert so an operator can prove delivery works."""
+    from datetime import datetime
+
+    from backend.email_service import FraudAlert, SendOutcome, send_fraud_alert
+    from backend.settings import get_backend_url
+    from fastapi import HTTPException
+
+    alert = FraudAlert(
+        transaction_id="TEST_TX_001",
+        fraud_confidence=0.87,
+        classification="HIGH",
+        timestamp=datetime.now().isoformat(),
+        graph_score=0.85,
+        behavioral_score=0.88,
+        temporal_score=0.90,
+        graph_signal="Graph pattern: HUB_AND_SPOKE. Convergence count: 3 distinct senders.",
+        behavioral_signal="High reconstruction error in spending pattern. DSAA score: 0.88",
+        temporal_signal="Burstiness coefficient 0.92 — machine-paced activity.",
+        forensic_report=(
+            "Test alert from DeepSentinel. If you are reading this, email "
+            "delivery is configured correctly."
+        ),
+        typology_name="Mule Network - Hub and Spoke",
+        typology_id="TY_001_MULE",
+    )
+
+    result = await send_fraud_alert(alert, [req.email], backend_url=await get_backend_url())
+
+    # 409, not 500: nothing is broken, the server simply is not set up to send.
+    if result.outcome is SendOutcome.NOT_CONFIGURED:
+        raise HTTPException(status_code=409, detail=result.detail)
+    if result.outcome is SendOutcome.FAILED:
+        raise HTTPException(status_code=502, detail=result.detail)
+
+    return {
+        "status": "sent",
+        "recipient": req.email,
+        "provider": result.provider,
+        "note": "Check the spam folder if it does not arrive within a minute.",
+    }
+
+
+@app.get("/email-template/preview", tags=["email"])
+async def email_template_preview(classification: str = "HIGH"):
+    """Render the alert template so the page can show what recipients see."""
+    from datetime import datetime
+
+    from backend.email_service import FraudAlert, build_email_html
+    from fastapi.responses import HTMLResponse
+
+    alert = FraudAlert(
+        transaction_id="PREVIEW_TX",
+        fraud_confidence={"CRITICAL": 0.96, "HIGH": 0.87, "MEDIUM": 0.62, "LOW": 0.21}
+        .get(classification.upper(), 0.87),
+        classification=classification.upper(),
+        timestamp=datetime.now().isoformat(),
+        graph_score=0.85, behavioral_score=0.88, temporal_score=0.90,
+        graph_signal="Graph pattern: HUB_AND_SPOKE. Convergence count: 3 distinct senders.",
+        behavioral_signal="High reconstruction error in spending pattern.",
+        temporal_signal="Burstiness coefficient 0.92 — machine-paced activity.",
+        forensic_report="Preview of the alert an analyst receives.",
+        typology_name="Mule Network - Hub and Spoke",
+        typology_id="TY_001_MULE",
+    )
+    return HTMLResponse(build_email_html(alert, "http://localhost:8090"))
+
+
+@app.get("/email/status", tags=["email"])
+async def email_status(_: User = Depends(get_current_user)) -> dict:
+    """Which mail provider is configured, so the page can say so honestly."""
+    from backend.email_service import _provider
+
+    provider, _cfg = _provider()
+    return {"configured": bool(provider), "provider": provider}
 
 
 @app.get("/health")

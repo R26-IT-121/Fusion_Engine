@@ -27,7 +27,8 @@ chromadb>=0.5,<2.0
 sentence-transformers>=3.3,<6.0
 
 # --- LLM ---
-# google-genai, not google-generativeai: the latter is discontinued upstream.
+# google-genai, not google-generativeai: the latter is discontinued upstream
+# and emits a FutureWarning on every import.
 google-genai>=1.0,<2.0
 
 # --- Auth & security ---
@@ -39,3 +40,18 @@ python-multipart>=0.0.9,<0.1
 # --- Config ---
 python-dotenv>=1.0,<2.0
 pydantic>=2.10,<3.0
+
+# --- Database ---
+# Not optional, despite having lived in an extra until now: backend.auth,
+# backend.settings, backend.sar and backend.db all import sqlalchemy at module
+# scope, and the default DATABASE_URL is sqlite+aiosqlite. An install without
+# these cannot import the app at all.
+sqlalchemy>=2.0,<3.0
+aiosqlite>=0.20,<1.0
+asyncpg>=0.29,<0.32
+
+# --- Batch upload (.xlsx) ---
+openpyxl>=3.1,<4.0
+
+# --- Subgraph diagram in the alert email ---
+pillow>=10.0,<14.0

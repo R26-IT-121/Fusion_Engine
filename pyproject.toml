@@ -36,13 +36,28 @@ dependencies = [
     # --- Config ---
     "python-dotenv (>=1.0,<2.0)",
     "pydantic (>=2.10,<3.0)",
-]
 
-[project.optional-dependencies]
-postgres = [
+    # --- Database ---
+    # Not optional. backend.auth, backend.settings, backend.sar and every
+    # backend.db module import sqlalchemy at module scope, so the app cannot
+    # even be imported without it. Both drivers are core for the same reason:
+    # aiosqlite backs the default DATABASE_URL, and asyncpg backs the shared
+    # Postgres every install is expected to point at.
     "sqlalchemy (>=2.0,<3.0)",
-    "asyncpg (>=0.29,<0.31)",
-    "alembic (>=1.13,<2.0)",
+    "aiosqlite (>=0.20,<1.0)",
+    "asyncpg (>=0.29,<0.32)",
+
+    # --- Batch upload ---
+    # Imported lazily by backend.batch. Without it .xlsx uploads are refused
+    # with a clear message, which is a graceful failure of a shipped feature
+    # rather than an acceptable default.
+    "openpyxl (>=3.1,<4.0)",
+
+    # --- Alert email subgraph diagram ---
+    # Guarded by an ImportError in monitor.alert_render, so its absence costs
+    # the picture rather than the email. The picture is the point of the alert,
+    # so it is declared.
+    "pillow (>=10.0,<14.0)",
 ]
 
 [tool.poetry.group.dev.dependencies]

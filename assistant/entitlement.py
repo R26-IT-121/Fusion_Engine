@@ -123,21 +123,40 @@ def save(changes: dict) -> AssistantSettings:
 
 def status_for(role: str) -> dict:
     """What the frontend needs to decide whether to render the assistant."""
+    from backend import packages
+
     s = load()
-    entitled = s.enabled and role in s.allowed_roles
+    licensed = packages.has("ai_assistant")
+    entitled = licensed and s.enabled and role in s.allowed_roles
+
+    if entitled:
+        reason = None
+    elif not licensed:
+        # The package is the binding constraint, so say so rather than blaming
+        # a per-role setting the admin cannot usefully change.
+        reason = packages.upsell("ai_assistant")
+    elif not s.enabled:
+        reason = "The AI assistant is disabled for this deployment."
+    else:
+        reason = UPSELL
+
     return {
         "available": entitled,
         "enabled": s.enabled,
         "entitled": role in s.allowed_roles,
-        "reason": None if entitled else (
-            "The AI assistant is disabled for this deployment."
-            if not s.enabled else UPSELL
-        ),
+        "licensed": licensed,
+        "reason": reason,
     }
 
 
 def require_entitled(role: str) -> AssistantSettings:
     """Raise 403 unless this role may use the assistant."""
+    from backend import packages
+
+    # Package first: it is the commercial constraint, and its message tells the
+    # user something they can act on.
+    packages.require("ai_assistant")
+
     s = load()
     if not s.enabled:
         raise HTTPException(403, "The AI assistant is disabled for this deployment.")
